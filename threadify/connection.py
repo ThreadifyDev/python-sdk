@@ -137,9 +137,10 @@ class Connection:
 
     async def start(
         self,
+        label: str = "",
         contract_name: str = "",
         service_name: str = "",
-        role: str = "",
+        refs: dict[str, Any] | None = None,
     ) -> ThreadInstance:
         from threadify.thread import ThreadInstance
 
@@ -148,19 +149,27 @@ class Connection:
 
         effective_service = first_non_empty(service_name, self._service_name)
 
+        # Prepare refs
+        message_refs = (refs or {}).copy()
+        message_refs[FIELD_SERVICE_NAME] = effective_service
+        if label:
+            message_refs["label"] = label
+
         msg: dict[str, Any] = {
             FIELD_ACTION: ACTION_START_THREAD,
-            FIELD_REFS: {FIELD_SERVICE_NAME: effective_service},
+            FIELD_REFS: message_refs,
         }
 
         if contract_name:
             msg[FIELD_CONTRACT_NAME] = contract_name
-            if role:
-                msg[FIELD_ROLE] = role
-            elif effective_service:
-                msg[FIELD_ROLE] = effective_service.removesuffix("-service")
+            role = ""
+            # Check if role is in refs or if we should derive it
+            if effective_service:
+                role = effective_service.removesuffix("-service")
             else:
-                msg[FIELD_ROLE] = "participant"
+                role = "participant"
+            
+            msg[FIELD_ROLE] = role
 
         await self._send(msg)
 
