@@ -18,6 +18,7 @@ from threadify.models import (
     WaitOptions,
 )
 from threadify.notification import Notification
+from threadify.otel_exporter import ThreadifySpanExporter
 from threadify.step import DuplicateStepError, ThreadStep, is_duplicate_error
 from threadify.thread import ThreadInstance
 
@@ -33,6 +34,7 @@ __all__ = [
     "DataRetriever",
     "ArchivedThread",
     "ArchivedStep",
+    "ThreadifySpanExporter",
     "ConnectOptions",
     "StepResult",
     "SubStepData",

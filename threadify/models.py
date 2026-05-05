@@ -27,6 +27,7 @@ ACTION_SUBSCRIBE = "subscribe"
 ACTION_UNSUBSCRIBE = "unsubscribe"
 ACTION_NOTIFICATION = "notification"
 ACTION_NOTIFICATION_BATCH = "notification_batch"
+ACTION_CLOSE_CONNECTION = "closeConnection"
 ACTION_ACK_NOTIFICATION = "ack_notification"
 
 # Protocol fields

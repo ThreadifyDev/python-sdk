@@ -202,31 +202,35 @@ class ThreadInstance:
         ref_key = f"linkedThread:{relationship}"
         await self.add_refs({ref_key: thread_id})
 
-    async def end(self, status: str = STATUS_CANCELLED, reason: str = "") -> ThreadEndResponse:
+    async def end(
+        self, status: str = STATUS_CANCELLED, reason: str | dict[str, Any] = ""
+    ) -> ThreadEndResponse:
         """End the thread with the given status.
 
         Args:
             status: Thread end status ("cancelled", "completed").
-            reason: Optional reason message.
+            reason: Optional reason message (string) or data dict.
         """
         return await self._end_thread(status, reason)
 
-    async def close(self, reason: str = "") -> ThreadEndResponse:
+    async def close(self, reason: str | dict[str, Any] = "") -> ThreadEndResponse:
         """Close the thread (convenience for end with 'cancelled')."""
         return await self._end_thread(STATUS_CANCELLED, reason)
 
-    async def complete(self, reason: str = "") -> ThreadEndResponse:
+    async def complete(self, reason: str | dict[str, Any] = "") -> ThreadEndResponse:
         """Complete the thread (convenience for end with 'completed')."""
         return await self._end_thread(STATUS_COMPLETED, reason)
 
-    async def _end_thread(self, status: str, reason: str) -> ThreadEndResponse:
+    async def _end_thread(self, status: str, reason: str | dict[str, Any]) -> ThreadEndResponse:
         msg: dict[str, Any] = {
             FIELD_ACTION: ACTION_THREAD_END,
             FIELD_THREAD_ID: self.thread_id,
             FIELD_STATUS: status,
         }
-        if reason:
+        if isinstance(reason, str) and reason:
             msg[FIELD_REASON] = reason
+        elif isinstance(reason, dict) and reason:
+            msg.update(reason)
 
         await self._send(msg)
 
@@ -271,6 +275,36 @@ class ThreadInstance:
         # Deliver notification.
         if not pw.future.done():
             pw.future.set_result(notif)
+
+    def get_step(self, step_name: str) -> Any | None:
+        """Return the step instance for the given step name, if any."""
+        return self._steps.get(step_name)
+
+    def get_all_steps(self) -> list[Any]:
+        """Return all recorded steps for this thread."""
+        return list(self._steps.values())
+
+    def get_thread_id(self) -> str:
+        """Return the thread ID."""
+        return self.thread_id
+
+    def get_contract_id(self) -> str:
+        """Return the contract ID (or empty string)."""
+        return self.contract_id
+
+    def create_span_exporter(self, options: dict[str, Any] | None = None) -> Any:
+        """Create an OpenTelemetry SpanExporter wired to this thread.
+
+        Args:
+            options: Optional configuration dict. Supported keys:
+                - ``refs``: list of attribute keys to map to Threadify refs.
+
+        Returns:
+            A :class:`~threadify.otel_exporter.ThreadifySpanExporter` instance.
+        """
+        from threadify.otel_exporter import ThreadifySpanExporter
+
+        return ThreadifySpanExporter(self._conn, options or {})
 
     def _cleanup(self) -> None:
         """Cancel pending waits and unregister from connection."""

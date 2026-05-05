@@ -151,6 +151,16 @@ class ThreadStep:
 
     # --- Status methods ---
 
+    async def stop(
+        self, status: str = STATUS_SUCCESS, message_or_data: str | dict | None = None
+    ) -> StepResult:
+        """Stop the step with an explicit status and optional message/data.
+
+        This is the generic status method; prefer :meth:`success`,
+        :meth:`failed`, or :meth:`error` for clarity.
+        """
+        return await self._stop(status, message_or_data)
+
     async def success(self, message_or_data: str | dict | None = None) -> StepResult:
         """Mark the step as successful and send it."""
         return await self._stop(STATUS_SUCCESS, message_or_data)
@@ -272,6 +282,11 @@ class ThreadStep:
     @property
     def context(self) -> dict[str, str]:
         return dict(self._context)
+
+    @property
+    def metadata(self) -> dict[str, Any] | None:
+        """Return the current metadata dict (or None if unset)."""
+        return dict(self._metadata) if self._metadata is not None else None
 
     def get_event_data(self) -> dict[str, Any]:
         """Return a copy of the current event data (for debugging)."""

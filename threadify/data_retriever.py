@@ -183,6 +183,24 @@ class DataRetriever:
         threads_list = data.get("threadsByRef") or []
         return [ArchivedThread(t, self._client) for t in threads_list if isinstance(t, dict)]
 
+    async def get_validation_results(self, thread_id: str, step_name: str = "") -> list[dict[str, Any]]:
+        """Retrieve validation results for a thread, optionally filtered by step."""
+        query = f"""
+            query GetThreadValidations($threadId: ID!, $options: ValidationQueryOptions) {{
+                thread(id: $threadId) {{
+                    validationResults(options: $options) {{
+                        {VALIDATION_RESULT_FIELDS}
+                    }}
+                }}
+            }}
+        """
+        options: dict[str, Any] = {"limit": 50}
+        if step_name:
+            options["stepName"] = step_name
+        data = await self._client.query(query, {"threadId": thread_id, "options": options})
+        thread_data = data.get("thread") or {}
+        return thread_data.get("validationResults") or []
+
     async def get_thread_chain(self, root_id: str, max_depth: int = 3) -> list[ArchivedThread]:
         """Retrieve a thread chain from the root."""
         if not root_id:

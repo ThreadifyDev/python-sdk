@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 from threadify.models import (
     ACTION_ACK_NOTIFICATION,
+    ACTION_CLOSE_CONNECTION,
     ACTION_JOIN_THREAD,
     ACTION_NOTIFICATION,
     ACTION_NOTIFICATION_BATCH,
@@ -38,6 +39,7 @@ from threadify.models import (
     FIELD_THREAD_ID_ACK,
     FIELD_THREAD_TOKEN,
     STATUS_SUCCESS,
+    DEFAULT_PROCESSED_MAX_SIZE,
     RefQuery,
     first_non_empty,
     require_non_empty,
@@ -73,6 +75,7 @@ class Connection:
         self._notification_handlers: dict[str, list[NotificationHandler]] = {}
         self._active_subscriptions: dict[str, list[str]] = {}
         self._processed_notifications: set[str] = set()
+        self._processed_notifications_max_size: int = DEFAULT_PROCESSED_MAX_SIZE
 
         self._recv_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
@@ -234,21 +237,55 @@ class Connection:
         return thread
 
     async def close(self) -> None:
-        self._connected = False
-        self._listener_task.cancel()
+        if not self._connected:
+            await self._ws.close()
+            return
+
+        msg = {FIELD_ACTION: ACTION_CLOSE_CONNECTION}
         try:
-            await self._listener_task
-        except asyncio.CancelledError:
+            await self._send(msg)
+            await self._wait_response(
+                lambda m: m.get(FIELD_ACTION) == ACTION_CLOSE_CONNECTION,
+                timeout=5.0,
+            )
+        except Exception:
             pass
-        await self._ws.close()
+        finally:
+            self._connected = False
+            self._listener_task.cancel()
+            try:
+                await self._listener_task
+            except asyncio.CancelledError:
+                pass
+            await self._ws.close()
 
     def subscribe(
         self,
         event: str,
-        step_name: str,
-        handler: NotificationHandler,
-    ) -> None:
-        if handler is None:
+        step_name_or_handler: str | NotificationHandler | None = None,
+        handler: NotificationHandler | None = None,
+    ) -> "Connection":
+        """Subscribe to notifications for a step or thread-level event.
+
+        Supports two signatures:
+
+        - ``subscribe(event, handler)`` — thread-level subscription.
+        - ``subscribe(event, step_name, handler)`` — step-level subscription.
+        """
+        # Determine signature: 2-param (thread-level) vs 3-param (step-level)
+        step_name: str
+        actual_handler: NotificationHandler
+
+        if callable(step_name_or_handler):
+            # 2-param: subscribe(event, handler)
+            step_name = "global"
+            actual_handler = step_name_or_handler
+        else:
+            # 3-param: subscribe(event, step_name, handler)
+            step_name = step_name_or_handler or "global"
+            actual_handler = handler  # type: ignore[assignment]
+
+        if actual_handler is None:
             raise ValueError("handler cannot be None")
 
         source, event_type = _parse_event(event)
@@ -256,15 +293,24 @@ class Connection:
         asyncio.ensure_future(self._send_subscription(step_name, event_types))
 
         key = f"{event}:{step_name}"
-        self._notification_handlers.setdefault(key, []).append(handler)
+        self._notification_handlers.setdefault(key, []).append(actual_handler)
+        return self
 
-    def unsubscribe(self, event: str, step_name: str) -> None:
-        key = f"{event}:{step_name}"
+    def unsubscribe(self, event: str, step_name: str = "") -> "Connection":
+        """Unsubscribe from notifications.
+
+        Args:
+            event: Event pattern to unsubscribe.
+            step_name: Step name (default: global / thread-level).
+        """
+        target_step = step_name or "global"
+        key = f"{event}:{target_step}"
         self._notification_handlers.pop(key, None)
 
-        has_handlers = any(k.endswith(f":{step_name}") for k in self._notification_handlers)
+        has_handlers = any(k.endswith(f":{target_step}") for k in self._notification_handlers)
         if not has_handlers:
-            asyncio.ensure_future(self._send_unsubscription(step_name))
+            asyncio.ensure_future(self._send_unsubscription(target_step))
+        return self
 
     async def _send_subscription(self, step_name: str, event_types: list[str]) -> None:
         if not self._connected:
@@ -316,6 +362,11 @@ class Connection:
             return
 
         self._processed_notifications.add(notif_id)
+
+        # Prevent memory leak — remove oldest if too large
+        if len(self._processed_notifications) > self._processed_notifications_max_size:
+            # Sets are unordered, but we can pop an arbitrary item
+            self._processed_notifications.pop()
 
         notif = Notification(data, self, ack_token)
 
@@ -392,11 +443,41 @@ class Connection:
     async def get_thread(self, thread_id: str) -> ArchivedThread:
         return await self._get_data_retriever().get_thread(thread_id)
 
+    async def get_thread_by_ref(self, ref_key: str, ref_value: str) -> ArchivedThread | None:
+        threads = await self._get_data_retriever().get_threads_by_ref(
+            RefQuery(ref_key=ref_key, ref_value=ref_value, limit=1)
+        )
+        return threads[0] if threads else None
+
     async def get_threads_by_ref(self, query: RefQuery) -> list[ArchivedThread]:
         return await self._get_data_retriever().get_threads_by_ref(query)
 
+    async def get_validation_results(self, thread_id: str, step_name: str = "") -> list[dict[str, Any]]:
+        return await self._get_data_retriever().get_validation_results(thread_id, step_name)
+
     async def get_thread_chain(self, root_id: str, max_depth: int = 3) -> list[ArchivedThread]:
         return await self._get_data_retriever().get_thread_chain(root_id, max_depth)
+
+    def create_span_exporter(self, options: dict[str, Any] | None = None) -> Any:
+        """Create an OpenTelemetry SpanExporter wired to this connection.
+
+        Args:
+            options: Optional configuration dict. Supported keys:
+                - ``refs``: list of attribute keys to map to Threadify refs.
+
+        Returns:
+            A :class:`~threadify.otel_exporter.ThreadifySpanExporter` instance.
+        """
+        from threadify.otel_exporter import ThreadifySpanExporter
+
+        return ThreadifySpanExporter(self, options or {})
+
+    async def reconnect(self) -> None:
+        """Resubscribe to all active subscriptions after a reconnection."""
+        if not self._connected:
+            raise RuntimeError("Not connected")
+        for step_name, event_types in self._active_subscriptions.items():
+            await self._send_subscription(step_name, event_types)
 
     def _remove_thread(self, thread_id: str) -> None:
         self._threads.pop(thread_id, None)
