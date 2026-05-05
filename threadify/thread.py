@@ -50,7 +50,7 @@ class ThreadInstance:
 
     Usage::
 
-        thread = await conn.start(contract_name="order_flow")
+        thread = await conn.start("Order-123")
         step = thread.step("order_placed")
         result = await step.add_context({"orderId": "ORD-123"}).success("Order received")
         await thread.complete("All done")

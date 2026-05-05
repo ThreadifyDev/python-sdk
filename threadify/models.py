@@ -7,6 +7,7 @@ from typing import Any
 # --- Constants ---
 
 DEFAULT_CONNECT_TIMEOUT = 10.0  # seconds
+DEFAULT_WS_URL = "wss://eng.threadify.dev/threads"
 DEFAULT_REQUEST_TIMEOUT = 10.0
 DEFAULT_WAIT_TIMEOUT = 5.0
 DEFAULT_MAX_IN_FLIGHT = 10
@@ -113,7 +114,7 @@ class ConnectOptions:
     """Configuration for connecting to the Threadify Engine."""
 
     service_name: str = ""
-    ws_url: str = ""
+    ws_url: str = DEFAULT_WS_URL
     graphql_url: str = ""
     debug: bool = False
     max_in_flight: int = DEFAULT_MAX_IN_FLIGHT

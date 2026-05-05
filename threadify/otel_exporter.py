@@ -50,7 +50,7 @@ class ThreadifySpanExporter(_SpanExporterBase):
         from threadify import Threadify
 
         conn = await Threadify.connect("api-key", service_name="my-service", ...)
-        thread = await conn.start(contract_name="order_flow")
+        thread = await conn.start("Order-123")
 
         exporter = thread.create_span_exporter(options={"refs": ["orderId"]})
 

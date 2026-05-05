@@ -13,7 +13,7 @@ async def main():
         print("Connected to Threadify!")
 
         # 2. Start a new thread
-        thread = await conn.start(contract_name="order_processing")
+        thread = await conn.start("Order-PY-123")
         print(f"Thread started: {thread.thread_id}")
 
         # 3. Record steps using the fluent API

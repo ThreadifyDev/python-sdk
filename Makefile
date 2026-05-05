@@ -18,13 +18,13 @@ fmt:
 	ruff format .
 
 build:
-	python -m build
+	python3 -m build
 
 publish-test: build
-	python -m twine upload --repository testpypi dist/*
+	python3 -m twine upload --repository testpypi dist/*
 
 publish: build
-	python -m twine upload dist/*
+	python3 -m twine upload dist/*
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +

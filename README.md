@@ -1,6 +1,9 @@
 # Threadify Python SDK
 
-Python SDK for connecting to the Threadify Engine over WebSocket and querying archived data over GraphQL.
+Python SDK for [Threadify](https://threadify.dev) — service-delivery intelligence that tracks every customer request from start to finish across every system, team, and partner.
+
+- **Documentation:** [https://docs.threadify.dev](https://docs.threadify.dev)
+- **Create an account:** [https://threadify.dev](https://threadify.dev)
 
 ## Installation
 
@@ -27,14 +30,13 @@ async def main():
         conn = await Threadify.connect(
             "your-api-key",
             service_name="orders-service",
-            ws_url="wss://eng.threadify.dev/threads",
         )
     except Exception as e:
         logging.error(f"Failed to connect: {e}")
         return
 
     try:
-        thread = await conn.start(contract_name="order_flow")
+        thread = await conn.start("Order-123")
         
         # Easy chaining!
         await (
@@ -52,7 +54,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-`ws_url` is required. The SDK no longer uses a hardcoded default URL.
+`ws_url` defaults to `wss://eng.threadify.dev/threads`. Override it if you are using a self-hosted or regional endpoint.
 
 ## Configuration
 
@@ -61,7 +63,7 @@ if __name__ == "__main__":
 Use keyword arguments with `Threadify.connect(...)`:
 
 - `service_name`
-- `ws_url` (required)
+- `ws_url` (optional, defaults to production)
 - `graphql_url`
 - `debug`
 - `max_in_flight`
@@ -75,7 +77,6 @@ from threadify import Threadify
 conn = await Threadify.connect(
     "your-api-key",
     service_name="inventory-service",
-    ws_url="wss://eng.threadify.dev/threads",
     debug=True,
 )
 ```
