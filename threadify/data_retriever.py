@@ -163,7 +163,10 @@ class DataRetriever:
                     limit: $limit
                     offset: $offset
                 ) {{
-                    {THREAD_FIELDS}
+                    threads {{
+                        {THREAD_FIELDS}
+                    }}
+                    totalCount
                 }}
             }}
         """
@@ -180,7 +183,8 @@ class DataRetriever:
         if q.started_before:
             variables["startedBefore"] = q.started_before
         data = await self._client.query(query, variables)
-        threads_list = data.get("threadsByRef") or []
+        connection = data.get("threadsByRef") or {}
+        threads_list = connection.get("threads") or []
         return [ArchivedThread(t, self._client) for t in threads_list if isinstance(t, dict)]
 
     async def get_validation_results(self, thread_id: str, step_name: str = "") -> list[dict[str, Any]]:

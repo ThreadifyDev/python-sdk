@@ -23,7 +23,7 @@ build:
 publish-test: build
 	python3 -m twine upload --repository testpypi dist/*
 
-publish: build
+publish: clean build
 	python3 -m twine upload dist/*
 
 clean:

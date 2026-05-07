@@ -120,15 +120,14 @@ class ThreadifySpanExporter(_SpanExporterBase):
             logger.exception("Failed to process span")
 
     async def _do_process_span(self, span: ReadableSpan) -> None:
-        ctx = span.span_context
+        ctx = span.get_span_context()
         trace_id = format(ctx.trace_id, "032x")
         span_id = format(ctx.span_id, "016x")
         thread = await self._get_or_start_thread(span, trace_id)
 
         # Step name
         step_name = self._span_attr(span, "threadify.step_name") or span.name
-        service_name = self._span_attr(span, "threadify.service")
-        step = thread.step(step_name, service_name or self._connection.service_name)
+        step = thread.step(step_name)
 
         # Separate attributes into context / refs
         context: dict[str, str] = {}
