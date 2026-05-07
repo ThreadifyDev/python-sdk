@@ -1,6 +1,6 @@
 # Threadify Python SDK
 
-Python SDK for [Threadify](https://threadify.dev) — service-delivery intelligence that tracks every customer request from start to finish across every system, team, and partner.
+Python SDK for [Threadify](https://threadify.dev) — Service-delivery intelligence that tracks every customer request from start to finish across every system, team, and partner.
 
 - **Documentation:** [https://docs.threadify.dev](https://docs.threadify.dev)
 - **Create an account:** [https://threadify.dev](https://threadify.dev)
