@@ -73,6 +73,9 @@ class ThreadifySpanExporter(_SpanExporterBase):
         else:
             self._refs_map = {}
 
+        # Span-name filters; e.g. ["invoke_llm", "adk.before*", "llm.*"]
+        self._filters: list[str] = self._options.get("filters", [])
+
         # trace_id -> asyncio.Future[ThreadInstance]
         self._trace_threads: dict[str, asyncio.Future[Any]] = {}
 
@@ -111,6 +114,8 @@ class ThreadifySpanExporter(_SpanExporterBase):
 
     async def _process_all(self, spans: list[ReadableSpan]) -> None:
         for span in spans:
+            if self._should_drop(span.name):
+                continue
             await self._process_span(span)
 
     async def _process_span(self, span: ReadableSpan) -> None:
@@ -275,6 +280,18 @@ class ThreadifySpanExporter(_SpanExporterBase):
             )
 
         return await self._trace_threads[trace_id]
+
+    def _should_drop(self, name: str) -> bool:
+        for f in self._filters:
+            if not f:
+                continue
+            if f.endswith("*"):
+                if name.startswith(f[:-1]):
+                    return True
+                continue
+            if name == f:
+                return True
+        return False
 
     @staticmethod
     def _span_attr(span: ReadableSpan, key: str) -> str | None:

@@ -140,6 +140,38 @@ This SDK follows [Semantic Versioning](https://semver.org/) and [Conventional Co
 - `feat: ...` -> Minor bump
 - `feat!: ...` or `BREAKING CHANGE: ...` -> Major bump
 
+## OpenTelemetry Integration
+
+The Python SDK includes the OpenTelemetry SpanExporter in the core package.
+
+```python
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from threadify import Threadify
+
+conn = await Threadify.connect("api-key", service_name="checkout-service")
+
+# Create exporter
+exporter = conn.create_span_exporter(options={"refs": ["order.id", "customer.id"]})
+
+# Filter spans by name — exact match or prefix wildcard with *
+exporter = conn.create_span_exporter(options={
+    "refs": ["order.id", "customer.id"],
+    "filters": ["invoke_llm", "adk.before*", "llm.*"],
+})
+
+provider = TracerProvider()
+provider.add_span_processor(BatchSpanProcessor(exporter))
+trace.set_tracer_provider(provider)
+```
+
+**Filter patterns:**
+
+- `"invoke_llm"` — exact match
+- `"adk.before*"` — prefix wildcard, drops any span starting with `adk.before`
+- `"llm.*"` — prefix wildcard, drops any span starting with `llm.`
+
 ## Testing
 
 To run the SDK tests, execute:

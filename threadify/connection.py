@@ -464,6 +464,9 @@ class Connection:
         Args:
             options: Optional configuration dict. Supported keys:
                 - ``refs``: list of attribute keys to map to Threadify refs.
+                - ``filters``: list of span-name patterns to drop. A trailing ``*``
+                  acts as a wildcard prefix match; otherwise an exact match is used.
+                  Example: ``["invoke_llm", "adk.before*", "llm.*"]``.
 
         Returns:
             A :class:`~threadify.otel_exporter.ThreadifySpanExporter` instance.
