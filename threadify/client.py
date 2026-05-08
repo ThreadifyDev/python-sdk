@@ -64,6 +64,10 @@ def _build_connect_options(
 class Threadify:
     """Factory for creating Threadify connections."""
 
+    FOR_EXTERNAL = "external"
+    FOR_OBSERVER = "observer"
+    FOR_PARTICIPANT = "participant"
+
     @staticmethod
     async def connect(
         api_key: str,

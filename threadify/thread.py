@@ -62,12 +62,14 @@ class ThreadInstance:
         thread_id: str,
         contract_id: str = "",
         role: str = "",
+        access_level: str = "",
         refs: dict[str, str] | None = None,
     ):
         self._conn = conn
         self.thread_id = thread_id
         self.contract_id = contract_id
         self.role = role
+        self.access_level = access_level
         self.refs: dict[str, str] = refs or {}
 
         self._steps: dict[str, Any] = {}

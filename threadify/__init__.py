@@ -5,6 +5,7 @@ from threadify.client import (
 from threadify.connection import Connection
 from threadify.data_retriever import ArchivedStep, ArchivedThread, DataRetriever
 from threadify.models import (
+    AccessLevel,
     CompleteDataOptions,
     ConnectOptions,
     HistoryQueryOptions,
@@ -46,6 +47,7 @@ __all__ = [
     "RefQuery",
     "CompleteDataOptions",
     "HistoryQueryOptions",
+    "AccessLevel",
 ]
 
 __version__ = "0.1.0"

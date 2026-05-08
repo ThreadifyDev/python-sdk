@@ -109,6 +109,12 @@ class ValidationSeverity(str, Enum):
     CRITICAL = "critical"
 
 
+class AccessLevel(str, Enum):
+    EXTERNAL = "external"
+    OBSERVER = "observer"
+    PARTICIPANT = "participant"
+
+
 @dataclass
 class ConnectOptions:
     """Configuration for connecting to the Threadify Engine."""

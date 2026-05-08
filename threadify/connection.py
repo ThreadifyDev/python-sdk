@@ -182,7 +182,7 @@ class Connection:
             raise RuntimeError(resp.get(FIELD_MESSAGE, "failed to start thread"))
 
         thread_id = resp[FIELD_THREAD_ID]
-        thread = ThreadInstance(self, thread_id, contract_name, "", None)
+        thread = ThreadInstance(self, thread_id, contract_name, "", resp.get(FIELD_ACCESS_LEVEL, ""), None)
         self._threads[thread_id] = thread
         self._logger.debug(f"Thread started: {thread_id}")
         return thread
@@ -231,7 +231,7 @@ class Connection:
 
         thread_id = resp[FIELD_THREAD_ID]
         thread_role = resp.get(FIELD_ROLE, "")
-        thread = ThreadInstance(self, thread_id, resp.get("contractId", ""), thread_role, None)
+        thread = ThreadInstance(self, thread_id, resp.get("contractId", ""), thread_role, resp.get(FIELD_ACCESS_LEVEL, ""), None)
         self._threads[thread_id] = thread
         self._logger.debug(f"Joined thread: {thread_id}, Role: {thread_role}")
         return thread
