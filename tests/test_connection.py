@@ -36,6 +36,7 @@ def _make_connection():
     conn._notification_handlers = {}
     conn._active_subscriptions = {}
     conn._processed_notifications = set()
+    conn._processed_notifications_max_size = 10_000
     conn._recv_queue = asyncio.Queue()
     conn._data_retriever = None
     import logging
@@ -118,6 +119,105 @@ class TestConnectionProperties:
     async def test_is_connected(self):
         conn = _make_connection()
         assert conn.is_connected is True
+
+
+class TestStart:
+    @pytest.mark.asyncio
+    async def test_start_with_label_and_optional_contract(self):
+        conn = _make_connection()
+        conn._send = AsyncMock()
+        conn._wait_response = AsyncMock(
+            return_value={
+                "action": "startThread",
+                "status": "success",
+                "threadId": "thread-123",
+            }
+        )
+
+        thread = await conn.start("customer-123", "customer")
+
+        assert thread.thread_id == "thread-123"
+        assert thread.role == "test"
+        assert thread.refs["label"] == "customer-123"
+        assert thread.refs["serviceName"] == "test-service"
+        sent_msg = conn._send.call_args.args[0]
+        assert sent_msg["refs"]["label"] == "customer-123"
+        assert sent_msg["contractName"] == "customer"
+        assert sent_msg["role"] == "test"
+
+    @pytest.mark.asyncio
+    async def test_start_with_legacy_refs_first_signature(self):
+        conn = _make_connection()
+        conn._send = AsyncMock()
+        conn._wait_response = AsyncMock(
+            return_value={
+                "action": "startThread",
+                "status": "success",
+                "threadId": "thread-legacy-123",
+            }
+        )
+
+        thread = await conn.start({"customer_id": "123"}, "customer")
+
+        assert thread.thread_id == "thread-legacy-123"
+        assert thread.refs["customer_id"] == "123"
+        assert thread.refs["serviceName"] == "test-service"
+        sent_msg = conn._send.call_args.args[0]
+        assert sent_msg["refs"]["customer_id"] == "123"
+        assert "label" not in sent_msg["refs"]
+        assert sent_msg["contractName"] == "customer"
+
+    @pytest.mark.asyncio
+    async def test_start_without_contract_still_works(self):
+        conn = _make_connection()
+        conn._send = AsyncMock()
+        conn._wait_response = AsyncMock(
+            return_value={
+                "action": "startThread",
+                "status": "success",
+                "threadId": "thread-no-contract-123",
+            }
+        )
+
+        thread = await conn.start("customer-123")
+
+        assert thread.thread_id == "thread-no-contract-123"
+        assert thread.refs["label"] == "customer-123"
+        assert thread.refs["serviceName"] == "test-service"
+        sent_msg = conn._send.call_args.args[0]
+        assert sent_msg["refs"]["label"] == "customer-123"
+        assert "contractName" not in sent_msg
+        assert "role" not in sent_msg
+
+    @pytest.mark.asyncio
+    async def test_start_accepts_keyword_config_options(self):
+        conn = _make_connection()
+        conn._send = AsyncMock()
+        conn._wait_response = AsyncMock(
+            return_value={
+                "action": "startThread",
+                "status": "success",
+                "threadId": "thread-options-123",
+            }
+        )
+
+        thread = await conn.start(
+            contract_name="order_processing",
+            role="merchant",
+            refs={"customer_id": "123"},
+            tags=["priority", "external"],
+        )
+
+        assert thread.thread_id == "thread-options-123"
+        assert thread.role == "merchant"
+        assert thread.tags == ["priority", "external"]
+        assert thread.refs["customer_id"] == "123"
+        assert thread.refs["serviceName"] == "test-service"
+        sent_msg = conn._send.call_args.args[0]
+        assert sent_msg["contractName"] == "order_processing"
+        assert sent_msg["role"] == "merchant"
+        assert sent_msg["refs"]["customer_id"] == "123"
+        assert sent_msg["tags"] == ["priority", "external"]
 
 
 class TestJoin:

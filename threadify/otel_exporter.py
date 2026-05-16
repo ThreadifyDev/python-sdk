@@ -170,7 +170,7 @@ class ThreadifySpanExporter(_SpanExporterBase):
         if context:
             step.add_context(context)
         if refs:
-            step.add_refs(refs)
+            await thread.add_refs(refs)
 
         # Map timing (OTel uses nanoseconds since epoch)
         start_time_ns = span.start_time
@@ -229,8 +229,6 @@ class ThreadifySpanExporter(_SpanExporterBase):
 
     async def _get_or_start_thread(self, span: ReadableSpan, trace_id: str) -> Any:
         """Get or create a ThreadInstance for this trace."""
-        from threadify.thread import ThreadInstance
-
         if trace_id not in self._trace_threads:
             fut: asyncio.Future[Any] = asyncio.get_event_loop().create_future()
             self._trace_threads[trace_id] = fut
