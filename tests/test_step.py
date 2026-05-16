@@ -24,9 +24,7 @@ class TestThreadStepFluent:
     def test_chaining(self):
         thread = _make_thread()
         step = ThreadStep("order_placed", thread, "test-svc")
-        result = step.add_context({"orderId": "ORD-1", "amount": "99.99"}).add_refs(
-            {"stripe": "pi_abc"}
-        )
+        result = step.add_context({"orderId": "ORD-1", "amount": "99.99"})
         assert result is step  # Fluent returns self.
         assert step.context == {"orderId": "ORD-1", "amount": "99.99"}
 

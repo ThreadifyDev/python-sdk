@@ -219,16 +219,19 @@ class Connection:
             msg[FIELD_THREAD_TOKEN] = token
         elif thread_id is not None:
             require_non_empty("thread_id", thread_id)
-            require_non_empty("role", role)
             msg[FIELD_THREAD_ID] = thread_id
-            msg[FIELD_ROLE] = role
+            if role:
+                msg[FIELD_ROLE] = role
         elif token_or_thread_id is not None:
             require_non_empty("token_or_thread_id", token_or_thread_id)
-            if role:
-                msg[FIELD_THREAD_ID] = token_or_thread_id
-                msg[FIELD_ROLE] = role
-            else:
+            # If it has 3 parts (JWT) or is a long string, it's likely a token. Otherwise it's a thread ID.
+            is_token = len(token_or_thread_id.split('.')) == 3 or len(token_or_thread_id) > 50
+            if is_token and not role:
                 msg[FIELD_THREAD_TOKEN] = token_or_thread_id
+            else:
+                msg[FIELD_THREAD_ID] = token_or_thread_id
+                if role:
+                    msg[FIELD_ROLE] = role
         else:
             raise ValueError("provide token, thread_id+role, or token_or_thread_id")
 

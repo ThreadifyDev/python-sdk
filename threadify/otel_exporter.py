@@ -170,7 +170,7 @@ class ThreadifySpanExporter(_SpanExporterBase):
         if context:
             step.add_context(context)
         if refs:
-            step.add_refs(refs)
+            await thread.add_refs(refs)
 
         # Map timing (OTel uses nanoseconds since epoch)
         start_time_ns = span.start_time
