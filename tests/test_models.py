@@ -3,6 +3,7 @@ import pytest
 from threadify.models import (
     DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_MAX_IN_FLIGHT,
+    DEFAULT_WS_URL,
     ConnectOptions,
     StepResult,
     StepStatus,
@@ -77,10 +78,10 @@ class TestConnectOptions:
     def test_defaults(self):
         opts = ConnectOptions()
         opts.with_defaults()
-        assert opts.ws_url == ""
+        assert opts.ws_url == DEFAULT_WS_URL
         assert opts.max_in_flight == DEFAULT_MAX_IN_FLIGHT
         assert opts.connect_timeout == DEFAULT_CONNECT_TIMEOUT
-        assert opts.graphql_url == ""
+        assert opts.graphql_url == derive_graphql_url(DEFAULT_WS_URL)
 
     def test_preserves_custom(self):
         opts = ConnectOptions(
@@ -100,7 +101,7 @@ class TestConnectOptions:
         opts2 = ConnectOptions(ws_url="wss://custom.com/threads", max_in_flight=100)
         opts2.validate()  # Should not raise.
 
-    def test_validate_requires_ws_url(self):
+    def test_validate_requires_non_empty_ws_url(self):
         opts = ConnectOptions(ws_url="")
         with pytest.raises(ValueError, match="ws_url is required"):
             opts.validate()

@@ -20,6 +20,8 @@ from threadify.models import (
     ACTION_START_THREAD,
     ACTION_SUBSCRIBE,
     ACTION_UNSUBSCRIBE,
+    DEFAULT_PROCESSED_MAX_SIZE,
+    FIELD_ACCESS_LEVEL,
     FIELD_ACK_TOKEN,
     FIELD_ACTION,
     FIELD_CONTRACT_NAME,
@@ -40,7 +42,6 @@ from threadify.models import (
     FIELD_THREAD_ID_ACK,
     FIELD_THREAD_TOKEN,
     STATUS_SUCCESS,
-    DEFAULT_PROCESSED_MAX_SIZE,
     RefQuery,
     first_non_empty,
     require_non_empty,
@@ -146,6 +147,7 @@ class Connection:
         service_name: str = "",
         refs: dict[str, Any] | None = None,
         tags: list[str] | None = None,
+        role: str = "",
     ) -> ThreadInstance:
         from threadify.thread import ThreadInstance
 
@@ -154,27 +156,29 @@ class Connection:
 
         effective_service = first_non_empty(service_name, self._service_name)
 
-        # Prepare refs
         message_refs = (refs or {}).copy()
+        label_value = label
+
         message_refs[FIELD_SERVICE_NAME] = effective_service
-        if label:
-            message_refs["label"] = label
+        if label_value:
+            message_refs["label"] = label_value
 
         msg: dict[str, Any] = {
             FIELD_ACTION: ACTION_START_THREAD,
             FIELD_REFS: message_refs,
         }
 
+        effective_role = role
         if contract_name:
             msg[FIELD_CONTRACT_NAME] = contract_name
-            role = ""
-            # Check if role is in refs or if we should derive it
-            if effective_service:
-                role = effective_service.removesuffix("-service")
-            else:
-                role = "participant"
-            
-            msg[FIELD_ROLE] = role
+            if not effective_role:
+                if effective_service:
+                    effective_role = effective_service.removesuffix("-service")
+                else:
+                    effective_role = "participant"
+
+        if effective_role:
+            msg[FIELD_ROLE] = effective_role
 
         # Validate and attach tags if provided
         if tags:
@@ -191,7 +195,14 @@ class Connection:
             raise RuntimeError(resp.get(FIELD_MESSAGE, "failed to start thread"))
 
         thread_id = resp[FIELD_THREAD_ID]
-        thread = ThreadInstance(self, thread_id, contract_name, "", resp.get(FIELD_ACCESS_LEVEL, ""), None)
+        thread = ThreadInstance(
+            self,
+            thread_id,
+            contract_name,
+            effective_role,
+            resp.get(FIELD_ACCESS_LEVEL, ""),
+            message_refs.copy(),
+        )
         thread.tags = list(tags) if tags else []
         self._threads[thread_id] = thread
         self._logger.debug(f"Thread started: {thread_id}")
@@ -277,7 +288,7 @@ class Connection:
         event: str,
         step_name_or_handler: str | NotificationHandler | None = None,
         handler: NotificationHandler | None = None,
-    ) -> "Connection":
+    ) -> Connection:
         """Subscribe to notifications for a step or thread-level event.
 
         Supports two signatures:
@@ -309,7 +320,7 @@ class Connection:
         self._notification_handlers.setdefault(key, []).append(actual_handler)
         return self
 
-    def unsubscribe(self, event: str, step_name: str = "") -> "Connection":
+    def unsubscribe(self, event: str, step_name: str = "") -> Connection:
         """Unsubscribe from notifications.
 
         Args:

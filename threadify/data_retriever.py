@@ -183,8 +183,12 @@ class DataRetriever:
         if q.started_before:
             variables["startedBefore"] = q.started_before
         data = await self._client.query(query, variables)
-        connection = data.get("threadsByRef") or {}
-        threads_list = connection.get("threads") or []
+        threads_by_ref = data.get("threadsByRef")
+        if isinstance(threads_by_ref, list):
+            threads_list = threads_by_ref
+        else:
+            connection = threads_by_ref or {}
+            threads_list = connection.get("threads") or []
         return [ArchivedThread(t, self._client) for t in threads_list if isinstance(t, dict)]
 
     async def get_validation_results(self, thread_id: str, step_name: str = "") -> list[dict[str, Any]]:

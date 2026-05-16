@@ -276,3 +276,4 @@ class TestStepProperties:
         assert data["action"] == "recordThreadEvent"
         assert data["stepName"] == "order_placed"
         assert data["threadId"] == "thread-001"
+        assert "refs" not in data

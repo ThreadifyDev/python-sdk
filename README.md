@@ -36,7 +36,14 @@ async def main():
         return
 
     try:
-        thread = await conn.start("Order-123")
+        thread = await conn.start(
+            contract_name="order_processing",
+            role="customer",
+            refs={"order_id": "ORD-123"},
+            tags=["priority"],
+        )
+
+        await thread.add_refs({"crm_id": "CRM-456"})
         
         # Easy chaining!
         await (
@@ -101,6 +108,22 @@ thread = await conn.join(
     thread_id="thread-123",
     role="supplier",
 )
+```
+
+### Start options
+
+`Connection.start(...)` supports named options for contract, role, refs, and tags, while preserving the older positional forms:
+
+```python
+thread = await conn.start(
+    contract_name="order_processing",
+    role="customer",
+    refs={"customer_id": "123"},
+    tags=["priority"],
+)
+thread = await conn.start("Order-123", "customer")
+thread = await conn.start({"customer_id": "123"}, "customer")
+thread = await conn.start("Order-123")  # contract is optional
 ```
 
 ## Subscriptions

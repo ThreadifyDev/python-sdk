@@ -1,0 +1,60 @@
+name: Python SDK CI
+
+on:
+  push:
+    paths:
+      - '.github/workflows/sdk.yml'
+      - 'threadify/**'
+      - 'tests/**'
+      - 'examples/**'
+      - 'README.md'
+      - 'pyproject.toml'
+      - 'Makefile'
+      - 'MANIFEST.in'
+  pull_request:
+    paths:
+      - '.github/workflows/sdk.yml'
+      - 'threadify/**'
+      - 'tests/**'
+      - 'examples/**'
+      - 'README.md'
+      - 'pyproject.toml'
+      - 'Makefile'
+      - 'MANIFEST.in'
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: 'pyproject.toml'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -e ".[dev]"
+      - name: Run Lint
+        run: make lint
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: 'pyproject.toml'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -e ".[dev]" pytest-cov
+      - name: Run Tests
+        run: make coverage
+      - name: Verify Examples
+        run: python3 -m compileall threadify examples
