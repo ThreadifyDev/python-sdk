@@ -146,7 +146,7 @@ class TestStart:
         assert sent_msg["role"] == "test"
 
     @pytest.mark.asyncio
-    async def test_start_with_legacy_refs_first_signature(self):
+    async def test_start_with_refs_and_contract(self):
         conn = _make_connection()
         conn._send = AsyncMock()
         conn._wait_response = AsyncMock(
@@ -157,7 +157,7 @@ class TestStart:
             }
         )
 
-        thread = await conn.start({"customer_id": "123"}, "customer")
+        thread = await conn.start(refs={"customer_id": "123"}, contract_name="customer")
 
         assert thread.thread_id == "thread-legacy-123"
         assert thread.refs["customer_id"] == "123"
