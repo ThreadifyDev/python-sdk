@@ -150,6 +150,7 @@ class ThreadifySpanExporter(_SpanExporterBase):
                 "threadify.step_name",
                 "threadify.role",
                 "threadify.service",
+                "threadify.tags",
             }:
                 continue
 
@@ -264,10 +265,12 @@ class ThreadifySpanExporter(_SpanExporterBase):
                     except Exception:
                         pass
 
+                    tags = self._span_attr_list(span, "threadify.tags")
                     thread = await self._connection.start(
                         label=label,
                         contract_name=contract_name or "",
                         service_name=service_name,
+                        tags=tags,
                     )
                 fut.set_result(thread)
             except Exception as exc:
@@ -297,6 +300,18 @@ class ThreadifySpanExporter(_SpanExporterBase):
     def _span_attr(span: ReadableSpan, key: str) -> str | None:
         value = span.attributes.get(key)
         return str(value) if value is not None else None
+
+    @staticmethod
+    def _span_attr_list(span: ReadableSpan, key: str) -> list[str] | None:
+        value = span.attributes.get(key)
+        if value is None:
+            return None
+        if isinstance(value, list):
+            return [str(v) for v in value]
+        if isinstance(value, str):
+            # Allow comma-separated tags as a fallback
+            return [v.strip() for v in value.split(",") if v.strip()]
+        return None
 
     @staticmethod
     def _make_result(code: int, error: str | None = None) -> Any:
