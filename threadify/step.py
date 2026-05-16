@@ -13,7 +13,6 @@ from threadify.models import (
     FIELD_IDEMPOTENCY_KEY,
     FIELD_IS_DUPLICATE,
     FIELD_MESSAGE,
-    FIELD_REFS,
     FIELD_SERVICE_NAME,
     FIELD_STARTED_AT,
     FIELD_STATUS,
@@ -41,7 +40,6 @@ class ThreadStep:
         result = await (
             step
             .add_context({"orderId": "ORD-123", "amount": 99.99})
-            .add_refs({"stripe_id": "pi_abc"})
             .success("Order placed!")
         )
     """
@@ -59,7 +57,6 @@ class ThreadStep:
         self._manual_idempotency_key: str = ""
         self._sub_steps: list[SubStepData] = []
         self._context: dict[str, str] = {}
-        self._refs: dict[str, str] = {}
         self._metadata: dict[str, Any] | None = None
         self._error: Exception | None = None
 
@@ -106,14 +103,6 @@ class ThreadStep:
                 s = str(v)
                 self._context[k] = s
                 self._context[f"private_{k}"] = s
-        return self
-
-    def add_refs(self, refs: dict[str, str] | None) -> ThreadStep:
-        """Add external system references."""
-        if self._error is not None:
-            return self
-        if refs:
-            self._refs.update(refs)
         return self
 
     def sub_step(
@@ -181,7 +170,6 @@ class ThreadStep:
         self._event[FIELD_FINISHED_AT] = now_iso()
         self._event[FIELD_STATUS] = status
         self._event[FIELD_CONTEXT] = self._context
-        self._event[FIELD_REFS] = self._refs
 
         # Handle optional message/data.
         if message_or_data is not None:
