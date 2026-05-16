@@ -158,7 +158,6 @@ class Connection:
 
         message_refs = (refs or {}).copy()
         label_value = label
-
         message_refs[FIELD_SERVICE_NAME] = effective_service
         if label_value:
             message_refs["label"] = label_value
