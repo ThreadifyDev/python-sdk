@@ -71,6 +71,7 @@ class ThreadInstance:
         self.role = role
         self.access_level = access_level
         self.refs: dict[str, str] = refs or {}
+        self.tags: list[str] = []  # Tags applied at thread creation (immutable)
 
         self._steps: dict[str, Any] = {}
         self._pending_waits: dict[str, _PendingWait] = {}

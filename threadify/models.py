@@ -75,6 +75,7 @@ FIELD_OWNER_ID = "ownerId"
 FIELD_SEVERITY = "severity"
 FIELD_TIMESTAMP = "timestamp"
 FIELD_VIOLATION_TYPE = "violationType"
+FIELD_TAGS = "tags"
 
 # Protocol status values
 STATUS_SUCCESS = "success"

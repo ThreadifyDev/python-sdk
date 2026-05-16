@@ -35,6 +35,7 @@ from threadify.models import (
     FIELD_SERVICE_NAME,
     FIELD_STATUS,
     FIELD_STEP_NAME,
+    FIELD_TAGS,
     FIELD_THREAD_ID,
     FIELD_THREAD_ID_ACK,
     FIELD_THREAD_TOKEN,
@@ -144,6 +145,7 @@ class Connection:
         contract_name: str = "",
         service_name: str = "",
         refs: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
     ) -> ThreadInstance:
         from threadify.thread import ThreadInstance
 
@@ -174,6 +176,13 @@ class Connection:
             
             msg[FIELD_ROLE] = role
 
+        # Validate and attach tags if provided
+        if tags:
+            for t in tags:
+                if not isinstance(t, str) or not t.strip():
+                    raise ValueError("Each tag must be a non-empty string")
+            msg[FIELD_TAGS] = list(tags)
+
         await self._send(msg)
 
         resp = await self._wait_response(lambda m: m.get(FIELD_ACTION) == ACTION_START_THREAD)
@@ -183,6 +192,7 @@ class Connection:
 
         thread_id = resp[FIELD_THREAD_ID]
         thread = ThreadInstance(self, thread_id, contract_name, "", resp.get(FIELD_ACCESS_LEVEL, ""), None)
+        thread.tags = list(tags) if tags else []
         self._threads[thread_id] = thread
         self._logger.debug(f"Thread started: {thread_id}")
         return thread
