@@ -30,6 +30,7 @@ ACTION_NOTIFICATION = "notification"
 ACTION_NOTIFICATION_BATCH = "notification_batch"
 ACTION_CLOSE_CONNECTION = "closeConnection"
 ACTION_ACK_NOTIFICATION = "ack_notification"
+ACTION_HEARTBEAT = "heartbeat"
 
 # Protocol fields
 FIELD_ACTION = "action"

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 from threadify.models import (
     ACTION_ACK_NOTIFICATION,
     ACTION_CLOSE_CONNECTION,
+    ACTION_HEARTBEAT,
     ACTION_JOIN_THREAD,
     ACTION_NOTIFICATION,
     ACTION_NOTIFICATION_BATCH,
@@ -84,6 +85,7 @@ class Connection:
         self._data_retriever: DataRetriever | None = None
 
         self._listener_task = asyncio.ensure_future(self._read_loop())
+        self._heartbeat_task = asyncio.ensure_future(self._heartbeat_loop())
 
     @property
     def service_name(self) -> str:
@@ -118,6 +120,16 @@ class Connection:
             self._logger.error(f"readLoop error: {exc}")
         finally:
             self._connected = False
+
+    async def _heartbeat_loop(self) -> None:
+        while self._connected:
+            await asyncio.sleep(30)
+            if not self._connected:
+                break
+            try:
+                await self._send({FIELD_ACTION: ACTION_HEARTBEAT})
+            except Exception:
+                pass
 
     async def _wait_response(
         self, match: Callable[[dict], bool], timeout: float = 10.0
@@ -277,8 +289,13 @@ class Connection:
         finally:
             self._connected = False
             self._listener_task.cancel()
+            self._heartbeat_task.cancel()
             try:
                 await self._listener_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await self._heartbeat_task
             except asyncio.CancelledError:
                 pass
             await self._ws.close()
