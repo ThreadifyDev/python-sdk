@@ -22,30 +22,16 @@ def _make_mock_ws():
 
 
 def _make_connection():
-    """Create a Connection with mocked WebSocket (listener disabled)."""
+    """Create a Connection with mocked WebSocket (listener/heartbeat disabled)."""
     ws = _make_mock_ws()
     conn = Connection.__new__(Connection)
-    conn._ws = ws
-    conn._api_key = "test-key"
-    conn._service_name = "test-service"
-    conn._graphql_url = "https://example.com/graphql"
-    conn._debug = False
-    conn._max_in_flight = 10
-    conn._connected = True
-    conn._threads = {}
-    conn._notification_handlers = {}
-    conn._active_subscriptions = {}
-    conn._processed_notifications = set()
-    conn._processed_notifications_max_size = 10_000
-    conn._recv_queue = asyncio.Queue()
-    conn._data_retriever = None
-    import logging
-
-    conn._logger = logging.getLogger("threadify-test")
-    # Create a completed listener task.
+    # Call __init__ to set all fields, then override tasks so they don't run.
+    conn.__init__(ws, "test-key", "test-service", "https://example.com/graphql", debug=False, max_in_flight=10)
     loop = asyncio.get_event_loop()
     conn._listener_task = loop.create_future()
     conn._listener_task.set_result(None)
+    conn._heartbeat_task = loop.create_future()
+    conn._heartbeat_task.set_result(None)
     return conn
 
 
