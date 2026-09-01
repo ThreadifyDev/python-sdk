@@ -81,6 +81,7 @@ class Connection:
         self._processed_notifications_max_size: int = DEFAULT_PROCESSED_MAX_SIZE
 
         self._recv_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._response_wait_lock = asyncio.Lock()
 
         self._data_retriever: DataRetriever | None = None
 
@@ -135,16 +136,24 @@ class Connection:
         self, match: Callable[[dict], bool], timeout: float = 10.0
     ) -> dict[str, Any]:
         """Wait for a response matching the predicate."""
-        deadline = asyncio.get_event_loop().time() + timeout
-        while True:
-            remaining = deadline - asyncio.get_event_loop().time()
-            if remaining <= 0:
-                raise asyncio.TimeoutError("response timeout")
+        buffered: list[dict[str, Any]] = []
+        async with self._response_wait_lock:
+            deadline = asyncio.get_running_loop().time() + timeout
+            try:
+                while True:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        raise asyncio.TimeoutError("response timeout")
 
-            msg = await asyncio.wait_for(self._recv_queue.get(), timeout=remaining)
-            if match(msg):
-                return msg
-            await self._recv_queue.put(msg)
+                    msg = await asyncio.wait_for(
+                        self._recv_queue.get(), timeout=remaining
+                    )
+                    if match(msg):
+                        return msg
+                    buffered.append(msg)
+            finally:
+                for msg in buffered:
+                    self._recv_queue.put_nowait(msg)
 
     async def _send(self, msg: dict[str, Any]) -> None:
         """Send a JSON message over the WebSocket."""
@@ -419,20 +428,14 @@ class Connection:
             thread._handle_notification(notif)
 
     def _get_event_pattern(self, notif: Notification) -> str:
-        source = notif.source or "execution"
+        source = notif.source or "step"
         event_type = STATUS_SUCCESS
         if notif.notification_type:
             parts = notif.notification_type.split(".", 1)
             if len(parts) == 2:
                 event_type = parts[1]
 
-        source_map = {
-            "execution": "step",
-            "validation": "rule",
-            "thread": "thread",
-        }
-        sdk_source = source_map.get(source, source)
-        return f"{sdk_source}.{event_type}"
+        return f"{source}.{event_type}"
 
     def _trigger_handlers(self, event_pattern: str, notif: Notification) -> None:
         step_name = notif.step_name
@@ -528,20 +531,24 @@ class Connection:
 
 
 def _parse_event(event: str) -> tuple[str, str]:
-    normalized = event.replace("step", "execution", 1).replace("rule", "validation", 1)
-    parts = normalized.split(".", 1)
+    parts = event.split(".", 1)
     source = parts[0] if parts[0] else "*"
     event_type = parts[1] if len(parts) > 1 and parts[1] else "*"
+    if source not in {"step", "rule", "thread", "*"}:
+        raise ValueError(
+            f"Unsupported notification source {source!r}; "
+            "expected 'step', 'rule', 'thread', or '*'"
+        )
     return source, event_type
 
 
 def _build_event_types(source: str, event_type: str) -> list[str]:
     if source == "*" and event_type == "*":
-        return ["execution.success", "execution.failed", "validation.passed", "validation.violated"]
-    if source == "execution" and event_type == "*":
-        return ["execution.success", "execution.failed"]
-    if source == "validation" and event_type == "*":
-        return ["validation.passed", "validation.violated"]
+        return ["step.success", "step.failed", "rule.passed", "rule.violated"]
+    if source == "step" and event_type == "*":
+        return ["step.success", "step.failed"]
+    if source == "rule" and event_type == "*":
+        return ["rule.passed", "rule.violated"]
     return [f"{source}.{event_type}"]
 
 

@@ -26,7 +26,7 @@ class TestNotificationConstruction:
             "severity": "critical",
             "message": "Missing amount",
             "source": "validation",
-            "notificationType": "validation.violated",
+            "notificationType": "rule.violated",
         }
         notif = Notification(data, conn, "ack-tok")
 
@@ -36,7 +36,7 @@ class TestNotificationConstruction:
         assert notif.contract_name == "order_flow"
         assert notif.severity == "critical"
         assert notif.source == "validation"
-        assert notif.notification_type == "validation.violated"
+        assert notif.notification_type == "rule.violated"
 
     def test_valid_timestamp(self):
         conn = _make_connection()

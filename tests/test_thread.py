@@ -64,7 +64,7 @@ async def test_wait_for():
             "threadId": "thread-123",
             "stepName": "order_placed",
             "source": "execution",
-            "notificationType": "execution.success",
+            "notificationType": "step.success",
             "stepStatus": "success",
         }
         notif = Notification(data=notif_data, connection=conn)

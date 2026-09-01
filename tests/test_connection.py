@@ -39,12 +39,12 @@ class TestParseEvent:
     @pytest.mark.parametrize(
         "event,expected_source,expected_type",
         [
-            ("step.success", "execution", "success"),
-            ("step.failed", "execution", "failed"),
-            ("rule.violated", "validation", "violated"),
-            ("rule.passed", "validation", "passed"),
-            ("step.*", "execution", "*"),
-            ("rule.*", "validation", "*"),
+            ("step.success", "step", "success"),
+            ("step.failed", "step", "failed"),
+            ("rule.violated", "rule", "violated"),
+            ("rule.passed", "rule", "passed"),
+            ("step.*", "step", "*"),
+            ("rule.*", "rule", "*"),
             ("*", "*", "*"),
         ],
     )
@@ -53,28 +53,32 @@ class TestParseEvent:
         assert source == expected_source
         assert etype == expected_type
 
+    def test_unsupported_source_is_rejected(self):
+        with pytest.raises(ValueError, match="Unsupported notification source"):
+            _parse_event("unsupported.success")
+
 
 class TestBuildEventTypes:
     def test_wildcard_all(self):
         result = _build_event_types("*", "*")
         assert set(result) == {
-            "execution.success",
-            "execution.failed",
-            "validation.passed",
-            "validation.violated",
+            "step.success",
+            "step.failed",
+            "rule.passed",
+            "rule.violated",
         }
 
-    def test_execution_wildcard(self):
-        result = _build_event_types("execution", "*")
-        assert set(result) == {"execution.success", "execution.failed"}
+    def test_step_wildcard(self):
+        result = _build_event_types("step", "*")
+        assert set(result) == {"step.success", "step.failed"}
 
-    def test_validation_wildcard(self):
-        result = _build_event_types("validation", "*")
-        assert set(result) == {"validation.passed", "validation.violated"}
+    def test_rule_wildcard(self):
+        result = _build_event_types("rule", "*")
+        assert set(result) == {"rule.passed", "rule.violated"}
 
     def test_specific(self):
-        result = _build_event_types("execution", "success")
-        assert result == ["execution.success"]
+        result = _build_event_types("step", "success")
+        assert result == ["step.success"]
 
 
 class TestMergeUnique:
@@ -105,6 +109,60 @@ class TestConnectionProperties:
     async def test_is_connected(self):
         conn = _make_connection()
         assert conn.is_connected is True
+
+
+class TestWaitResponse:
+    def test_skips_unmatched_responses_without_spinning(self):
+        async def scenario():
+            conn = _make_connection()
+            heartbeat = {"action": "heartbeat", "status": "success"}
+            joined = {
+                "action": "joinThread",
+                "status": "success",
+                "threadId": "thread-123",
+            }
+            conn._recv_queue.put_nowait(heartbeat)
+            conn._recv_queue.put_nowait(joined)
+
+            result = await conn._wait_response(
+                lambda message: message.get("action") == "joinThread",
+                timeout=0.1,
+            )
+
+            assert result == joined
+            assert conn._recv_queue.get_nowait() == heartbeat
+
+        asyncio.run(scenario())
+
+    def test_serializes_concurrent_waiters_and_preserves_other_response(self):
+        async def scenario():
+            conn = _make_connection()
+            join_waiter = asyncio.create_task(
+                conn._wait_response(
+                    lambda message: message.get("action") == "joinThread",
+                    timeout=0.1,
+                )
+            )
+            start_waiter = asyncio.create_task(
+                conn._wait_response(
+                    lambda message: message.get("action") == "startThread",
+                    timeout=0.1,
+                )
+            )
+            await asyncio.sleep(0)
+            conn._recv_queue.put_nowait(
+                {"action": "startThread", "status": "success", "threadId": "two"}
+            )
+            conn._recv_queue.put_nowait(
+                {"action": "joinThread", "status": "success", "threadId": "one"}
+            )
+
+            joined, started = await asyncio.gather(join_waiter, start_waiter)
+
+            assert joined["threadId"] == "one"
+            assert started["threadId"] == "two"
+
+        asyncio.run(scenario())
 
 
 class TestStart:
@@ -314,8 +372,8 @@ class TestNotificationHandling:
             "notificationId": "n-001",
             "threadId": "t-1",
             "stepName": "order_placed",
-            "source": "execution",
-            "notificationType": "execution.success",
+            "source": "step",
+            "notificationType": "step.success",
             "stepStatus": "success",
         }
 
@@ -345,8 +403,8 @@ class TestNotificationHandling:
             "notificationId": "n-err",
             "threadId": "t-1",
             "stepName": "broken_step",
-            "source": "execution",
-            "notificationType": "execution.failed",
+            "source": "step",
+            "notificationType": "step.failed",
             "stepStatus": "failed",
         }
 
