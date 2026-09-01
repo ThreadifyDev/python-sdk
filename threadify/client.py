@@ -9,6 +9,7 @@ from typing import Any
 import websockets
 
 from threadify.connection import Connection
+from threadify.management import EntityProfileManager
 from threadify.models import (
     ACTION_CONNECT,
     FIELD_ACTION,
@@ -67,6 +68,15 @@ class Threadify:
     FOR_EXTERNAL = "external"
     FOR_OBSERVER = "observer"
     FOR_PARTICIPANT = "participant"
+
+    @staticmethod
+    def entity_profiles(
+        api_key: str,
+        *,
+        web_api_url: str = "https://web.threadify.dev/api",
+    ) -> EntityProfileManager:
+        """Create a declarative entity-profile management client."""
+        return EntityProfileManager(api_key, web_api_url=web_api_url)
 
     @staticmethod
     async def connect(

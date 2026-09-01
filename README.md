@@ -63,6 +63,37 @@ if __name__ == "__main__":
 
 `ws_url` defaults to `wss://eng.threadify.dev/threads`. Override it if you are using a self-hosted or regional endpoint.
 
+## Entity profile config as code
+
+The management client sends a complete desired declaration to Threadify. The
+server performs metric reconciliation by name; SDK callers do not send database
+metric IDs or calculate deletions.
+
+```python
+profiles = Threadify.entity_profiles(
+    "your-service-api-key",
+    web_api_url="https://web.threadify.dev/api",
+)
+
+declaration = {
+    "name": "Customer",
+    "description": "Customer delivery intelligence",
+    "type": ["customer_id", "customer_email"],
+    "metrics": [
+        {
+            "name": "Delivery success rate",
+            "template_id": "delivery_success_rate",
+            "parameters": {"window": "30d"},
+        }
+    ],
+}
+
+plan = await profiles.apply(declaration, dry_run=True)
+result = await profiles.apply(declaration)
+await profiles.rename("Customer", "Account")  # explicit identity change
+await profiles.close()
+```
+
 ## Configuration
 
 ### Connect options
