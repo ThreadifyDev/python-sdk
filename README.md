@@ -61,7 +61,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-`ws_url` defaults to `wss://eng.threadify.dev/threads`. Override it if you are using a self-hosted or regional endpoint.
+For self-hosting, pass `engine_url="https://threadify.example.com"`. WebSocket and GraphQL paths are derived from that base, including reverse-proxy prefixes. Explicit `ws_url` and `graphql_url` remain available for split deployments.
 
 ## Entity profile config as code
 
@@ -118,6 +118,7 @@ result = await profiles.apply_file("threadify-profile.yaml")
 Use keyword arguments with `Threadify.connect(...)`:
 
 - `service_name`
+- `engine_url` (one HTTP(S) deployment base, including any proxy prefix)
 - `ws_url` (optional, defaults to production)
 - `graphql_url`
 - `debug`
@@ -256,3 +257,54 @@ Alternatively, use `pytest`:
 ```bash
 python3 -m pytest
 ```
+
+
+## Contract coordination (0.3)
+
+```python
+from threadify import Threadify, WaitOptions, ThreadifyError
+
+connection = await Threadify.connect(api_key, engine_url="https://threadify.example.com", service_name="payments")
+threads = await connection.get_threads_by_ref({"order_id": "ORD-1001"}, status="active", limit=25)
+thread = await connection.join(thread_id, "processor")
+grant = await thread.wait_for("charge", WaitOptions(timeout=15))
+# Execute the permitted business operation here.
+result = await thread.step("charge").add_context({"amount": 42}).success("charged", wait_for=True, timeout=15)
+assert result.validation.decision == "passed"
+# Resume validation of exactly this event if a previous caller stopped waiting.
+await thread.wait_for_validation("charge", result.step_id)
+```
+
+`wait_for()` now asks the Engine for a permission grant, carrying an invocation
+ID into the subsequent step report and its default idempotency key. It sends one
+request and waits for a final correlated response. The old notification-only
+helper is named `wait_for_notification()`; it does not authorize execution.
+
+Timeouts are in **seconds**, at most 300. Cancelling the Python task or reaching
+its timeout cancels the remote wait. Before reporting a granted operation, use
+`await grant.cancel()` if you decide not to execute it. Cancellation does not
+restore consumed fresh prerequisites; another invocation may need a new
+successful predecessor. A disconnect rejects
+pending requests immediately. No write is automatically retried; timeout errors
+retain `invocation_id`, `idempotency_key`, or `step_id` where available for recovery.
+A submitted event can still be persisted after its caller times out.
+
+With `wait_for=True`, duplicate, violated, unavailable, and mismatched validation
+responses raise `ThreadifyError` with a stable `code`; an ordinary acknowledgement
+is not a validation result. Normal non-waiting duplicate reports keep the existing
+`StepResult.duplicate` behavior. Contract definitions and Gherkin are enforced by
+the Engine; SDKs select the contract and role rather than parsing contracts.
+
+Install `threadify-sdk[otel]` to use the OTEL exporter. It preserves the recorded
+span start/end and span-event timestamps, including spans exported later.
+
+## Package CI and publishing
+
+CI tests Python 3.10, 3.12, and 3.13, including OTEL and wait-protocol regressions.
+The `pypi-publish.yml` workflow validates a matching `vX.Y.Z` tag, builds a wheel
+and source archive, checks metadata and wheel imports, then publishes using
+[PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/using-a-publisher/).
+Configure a trusted publisher for owner `ThreadifyDev`, repository `python-sdk`,
+workflow `pypi-publish.yml`, environment `pypi` in the `threadify-sdk` PyPI project.
+A manual workflow run builds artifacts without publishing. No release is created
+by running local tests or pushing an ordinary branch.

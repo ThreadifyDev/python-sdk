@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "threadify-sdk"
-version = "0.2.10"
+version = "0.3.0"
 description = "Python SDK for Threadify — Service-delivery intelligence. Track every customer request from start to finish across every system, team, and partner. Visit: https://threadify.dev"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,10 +32,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+otel = ["opentelemetry-sdk>=1.20"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.3",
+    "opentelemetry-sdk>=1.20",
 ]
 
 [tool.pytest.ini_options]

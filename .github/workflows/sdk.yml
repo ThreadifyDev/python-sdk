@@ -1,9 +1,10 @@
 name: Python SDK CI
 
 on:
+  workflow_call:
   push:
     paths:
-      - '.github/workflows/sdk.yml'
+      - '.github/workflows/*.yml'
       - 'threadify/**'
       - 'tests/**'
       - 'examples/**'
@@ -13,7 +14,7 @@ on:
       - 'MANIFEST.in'
   pull_request:
     paths:
-      - '.github/workflows/sdk.yml'
+      - '.github/workflows/*.yml'
       - 'threadify/**'
       - 'tests/**'
       - 'examples/**'
@@ -41,13 +42,16 @@ jobs:
         run: make lint
 
   test:
+    strategy:
+      matrix:
+        python: ['3.10', '3.12', '3.13']
     name: Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python }}
           cache: 'pip'
           cache-dependency-path: 'pyproject.toml'
       - name: Install dependencies

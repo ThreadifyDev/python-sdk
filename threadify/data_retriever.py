@@ -106,7 +106,11 @@ class GraphQLClient:
         )
 
         if resp.status_code != 200:
-            raise RuntimeError(f"GraphQL request failed: {resp.status_code} {resp.text}")
+            from threadify.waiting import http_error
+
+            raise http_error(
+                resp.status_code, f"GraphQL request failed: {resp.status_code} {resp.text}"
+            )
 
         result = resp.json()
 
@@ -142,8 +146,13 @@ class DataRetriever:
             raise RuntimeError(f"Thread not found: {thread_id}")
         return ArchivedThread(thread_data, self._client)
 
-    async def get_threads_by_ref(self, q: RefQuery) -> list[ArchivedThread]:
-        """Retrieve threads by reference key-value pair."""
+    async def get_threads_by_ref(
+        self, q: RefQuery | dict[str, str], **filters: Any
+    ) -> list[ArchivedThread]:
+        """Retrieve threads by a reference pair, with optional filters."""
+        from threadify.models import reference_query
+
+        q = reference_query(q, **filters)
         query = f"""
             query GetThreadsByRef(
                 $refKey: String!
@@ -191,7 +200,9 @@ class DataRetriever:
             threads_list = connection.get("threads") or []
         return [ArchivedThread(t, self._client) for t in threads_list if isinstance(t, dict)]
 
-    async def get_validation_results(self, thread_id: str, step_name: str = "") -> list[dict[str, Any]]:
+    async def get_validation_results(
+        self, thread_id: str, step_name: str = ""
+    ) -> list[dict[str, Any]]:
         """Retrieve validation results for a thread, optionally filtered by step."""
         query = f"""
             query GetThreadValidations($threadId: ID!, $options: ValidationQueryOptions) {{

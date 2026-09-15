@@ -74,6 +74,7 @@ class ThreadInstance:
         self.tags: list[str] = []  # Tags applied at thread creation (immutable)
 
         self._steps: dict[str, Any] = {}
+        self._invocation_grants: dict[str, Any] = {}
         self._pending_waits: dict[str, _PendingWait] = {}
 
     def step(self, step_name: str) -> ThreadStep:
@@ -128,7 +129,21 @@ class ThreadInstance:
             expires_at=resp.get(FIELD_EXPIRES_AT, ""),
         )
 
-    async def wait_for(
+    async def wait_for(self, step_name: str, options: WaitOptions | None = None):
+        """Wait for Engine permission to execute one contract step invocation."""
+        from threadify.waiting import wait_for_permission
+
+        return await wait_for_permission(self, step_name, options)
+
+    async def wait_for_validation(
+        self, step_name: str, step_id: str, options: WaitOptions | None = None
+    ):
+        """Wait for validation of the exact previously acknowledged event."""
+        from threadify.waiting import wait_for_validation
+
+        return await wait_for_validation(self, step_name, step_id, options)
+
+    async def wait_for_notification(
         self,
         step_name: str,
         options: WaitOptions | None = None,

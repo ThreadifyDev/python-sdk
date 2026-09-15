@@ -82,6 +82,8 @@ class Connection:
 
         self._recv_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._response_wait_lock = asyncio.Lock()
+        self._closed_event = asyncio.Event()
+        self._requests: dict[str, asyncio.Future] = {}
 
         self._data_retriever: DataRetriever | None = None
 
@@ -115,12 +117,24 @@ class Connection:
                     for n in msg.get(FIELD_NOTIFICATIONS, []):
                         if isinstance(n, dict):
                             self._handle_notification(n, "")
+                elif msg.get("requestId"):
+                    pending = self._requests.get(msg["requestId"])
+                    if pending is not None and not pending.done():
+                        pending.set_result(msg)
                 else:
                     await self._recv_queue.put(msg)
         except Exception as exc:
             self._logger.error(f"readLoop error: {exc}")
         finally:
             self._connected = False
+            self._closed_event.set()
+            for pending in self._requests.values():
+                if not pending.done():
+                    pending.set_exception(
+                        ConnectionError(
+                            "Threadify connection closed; operation outcome may be unknown"
+                        )
+                    )
 
     async def _heartbeat_loop(self) -> None:
         while self._connected:
@@ -135,6 +149,77 @@ class Connection:
     async def _wait_response(
         self, match: Callable[[dict], bool], timeout: float = 10.0
     ) -> dict[str, Any]:
+        response = asyncio.create_task(self._wait_response_legacy(match, timeout))
+        closed = asyncio.create_task(self._closed_event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                [response, closed], timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+            )
+            if response in done:
+                return response.result()
+            if closed in done:
+                raise ConnectionError(
+                    "Threadify connection closed; operation outcome may be unknown"
+                )
+            raise asyncio.TimeoutError("response timeout")
+        finally:
+            response.cancel()
+            closed.cancel()
+            await asyncio.gather(response, closed, return_exceptions=True)
+
+    async def _request(self, message: dict[str, Any], timeout: float = 10.0) -> dict[str, Any]:
+        from uuid import uuid4
+
+        from threadify.waiting import ThreadifyError, validate_timeout
+
+        validate_timeout(timeout)
+        if not self._connected:
+            raise ConnectionError("Threadify connection closed")
+        request_id = str(uuid4())
+        future = asyncio.get_running_loop().create_future()
+        self._requests[request_id] = future
+        deadline = asyncio.get_running_loop().time() + timeout
+
+        async def exchange():
+            await self._send({**message, "requestId": request_id})
+            return await future
+
+        try:
+            response = await asyncio.wait_for(exchange(), timeout)
+            if asyncio.get_running_loop().time() >= deadline:
+                raise asyncio.TimeoutError()
+            if response.get("status") != "success":
+                raise ThreadifyError(
+                    "THREADIFY_REQUEST_FAILED",
+                    response.get("message", "Request failed"),
+                    request_id=request_id,
+                    response=response,
+                    is_duplicate=response.get("isDuplicate", False),
+                )
+            return response
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            if self._connected and (message.get("await") or message.get("waitFor")):
+                try:
+                    await asyncio.wait_for(
+                        self._send({"action": "cancelWait", "targetRequestId": request_id}), 0.2
+                    )
+                except Exception:
+                    pass
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            raise ThreadifyError(
+                "THREADIFY_WAIT_TIMEOUT",
+                "Timed out waiting for Engine response",
+                request_id=request_id,
+            ) from exc
+        finally:
+            self._requests.pop(request_id, None)
+            if not future.done():
+                future.cancel()
+
+    async def _wait_response_legacy(
+        self, match: Callable[[dict], bool], timeout: float = 10.0
+    ) -> dict[str, Any]:
         """Wait for a response matching the predicate."""
         buffered: list[dict[str, Any]] = []
         async with self._response_wait_lock:
@@ -145,9 +230,7 @@ class Connection:
                     if remaining <= 0:
                         raise asyncio.TimeoutError("response timeout")
 
-                    msg = await asyncio.wait_for(
-                        self._recv_queue.get(), timeout=remaining
-                    )
+                    msg = await asyncio.wait_for(self._recv_queue.get(), timeout=remaining)
                     if match(msg):
                         return msg
                     buffered.append(msg)
@@ -257,7 +340,7 @@ class Connection:
         elif token_or_thread_id is not None:
             require_non_empty("token_or_thread_id", token_or_thread_id)
             # If it has 3 parts (JWT) or is a long string, it's likely a token. Otherwise it's a thread ID.
-            is_token = len(token_or_thread_id.split('.')) == 3 or len(token_or_thread_id) > 50
+            is_token = len(token_or_thread_id.split(".")) == 3 or len(token_or_thread_id) > 50
             if is_token and not role:
                 msg[FIELD_THREAD_TOKEN] = token_or_thread_id
             else:
@@ -276,7 +359,14 @@ class Connection:
 
         thread_id = resp[FIELD_THREAD_ID]
         thread_role = resp.get(FIELD_ROLE, "")
-        thread = ThreadInstance(self, thread_id, resp.get("contractId", ""), thread_role, resp.get(FIELD_ACCESS_LEVEL, ""), None)
+        thread = ThreadInstance(
+            self,
+            thread_id,
+            resp.get("contractId", ""),
+            thread_role,
+            resp.get(FIELD_ACCESS_LEVEL, ""),
+            None,
+        )
         self._threads[thread_id] = thread
         self._logger.debug(f"Joined thread: {thread_id}, Role: {thread_role}")
         return thread
@@ -297,6 +387,14 @@ class Connection:
             pass
         finally:
             self._connected = False
+            self._closed_event.set()
+            for pending in self._requests.values():
+                if not pending.done():
+                    pending.set_exception(
+                        ConnectionError(
+                            "Threadify connection closed; operation outcome may be unknown"
+                        )
+                    )
             self._listener_task.cancel()
             self._heartbeat_task.cancel()
             try:
@@ -487,16 +585,22 @@ class Connection:
     async def get_thread(self, thread_id: str) -> ArchivedThread:
         return await self._get_data_retriever().get_thread(thread_id)
 
-    async def get_thread_by_ref(self, ref_key: str, ref_value: str) -> ArchivedThread | None:
+    async def get_thread_by_ref(
+        self, ref_key: str | dict[str, str], ref_value: str | None = None
+    ) -> ArchivedThread | None:
         threads = await self._get_data_retriever().get_threads_by_ref(
-            RefQuery(ref_key=ref_key, ref_value=ref_value, limit=1)
+            ref_key if isinstance(ref_key, dict) else {ref_key: ref_value}, limit=1
         )
         return threads[0] if threads else None
 
-    async def get_threads_by_ref(self, query: RefQuery) -> list[ArchivedThread]:
-        return await self._get_data_retriever().get_threads_by_ref(query)
+    async def get_threads_by_ref(
+        self, query: RefQuery | dict[str, str], **filters: Any
+    ) -> list[ArchivedThread]:
+        return await self._get_data_retriever().get_threads_by_ref(query, **filters)
 
-    async def get_validation_results(self, thread_id: str, step_name: str = "") -> list[dict[str, Any]]:
+    async def get_validation_results(
+        self, thread_id: str, step_name: str = ""
+    ) -> list[dict[str, Any]]:
         return await self._get_data_retriever().get_validation_results(thread_id, step_name)
 
     async def get_thread_chain(self, root_id: str, max_depth: int = 3) -> list[ArchivedThread]:
@@ -536,8 +640,7 @@ def _parse_event(event: str) -> tuple[str, str]:
     event_type = parts[1] if len(parts) > 1 and parts[1] else "*"
     if source not in {"step", "rule", "thread", "*"}:
         raise ValueError(
-            f"Unsupported notification source {source!r}; "
-            "expected 'step', 'rule', 'thread', or '*'"
+            f"Unsupported notification source {source!r}; expected 'step', 'rule', 'thread', or '*'"
         )
     return source, event_type
 

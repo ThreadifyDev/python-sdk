@@ -23,8 +23,12 @@ from threadify.notification import Notification
 from threadify.otel_exporter import ThreadifySpanExporter
 from threadify.step import DuplicateStepError, ThreadStep, is_duplicate_error
 from threadify.thread import ThreadInstance
+from threadify.waiting import PermissionGrant, ThreadifyError, WaitResult
 
 __all__ = [
+    "PermissionGrant",
+    "ThreadifyError",
+    "WaitResult",
     "Threadify",
     "ThreadifyFactory",
     "Connection",
@@ -54,4 +58,4 @@ __all__ = [
     "AccessLevel",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
