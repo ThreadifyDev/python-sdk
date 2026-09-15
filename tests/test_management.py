@@ -40,6 +40,50 @@ async def test_apply_sends_complete_declaration_and_dry_run():
 
 
 @pytest.mark.asyncio
+async def test_apply_file_loads_yaml_and_uses_name_slug(tmp_path):
+    seen = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen["request"] = request
+        return httpx.Response(200, json={"status": "created", "dry_run": True})
+
+    config = tmp_path / "customer-profile.yaml"
+    config.write_text(
+        """name: Customer Profile
+description: Delivery health
+type:
+  - customer_id
+metrics: []
+""",
+        encoding="utf-8",
+    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    manager = EntityProfileManager(
+        "service-key", web_api_url="http://localhost:3001/api", http_client=client
+    )
+
+    result = await manager.apply_file(config, dry_run=True)
+
+    request = seen["request"]
+    assert request.url.path == "/api/entity-profile-types/customer_profile"
+    assert request.url.params["dry_run"] == "true"
+    assert result["status"] == "created"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_apply_file_rejects_non_mapping_yaml(tmp_path):
+    config = tmp_path / "invalid.yaml"
+    config.write_text("- customer\n- account\n", encoding="utf-8")
+    manager = EntityProfileManager("service-key")
+
+    with pytest.raises(ValueError, match="mapping at the document root"):
+        await manager.apply_file(config)
+
+    await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_apply_surfaces_api_error_body():
     async def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(400, json={"error": "metric names must be unique"})

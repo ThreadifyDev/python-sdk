@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import re
-from typing import Any, Mapping
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
 
 import httpx
+import yaml
 
 
 class ManagementAPIError(RuntimeError):
@@ -76,6 +80,24 @@ class EntityProfileManager:
         )
         self._raise_for_error(response)
         return response.json()
+
+    async def apply_file(
+        self,
+        path: str | Path,
+        *,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Load and apply a complete entity-profile declaration from YAML."""
+        source = Path(path)
+        try:
+            contents = await asyncio.to_thread(source.read_text, encoding="utf-8")
+            declaration = yaml.safe_load(contents)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"invalid entity profile YAML in {source}: {exc}") from exc
+
+        if not isinstance(declaration, Mapping):
+            raise ValueError("entity profile YAML must contain a mapping at the document root")
+        return await self.apply(declaration, dry_run=dry_run)
 
     async def archive(self, name: str) -> None:
         """Explicitly archive a profile type by its name-derived slug."""

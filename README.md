@@ -94,6 +94,23 @@ await profiles.rename("Customer", "Account")  # explicit identity change
 await profiles.close()
 ```
 
+The SDK can also load the declaration directly from YAML:
+
+```yaml
+# threadify-profile.yaml
+name: Customer
+description: Customer delivery intelligence
+type:
+  - customer_id
+  - customer_email
+metrics: []
+```
+
+```python
+plan = await profiles.apply_file("threadify-profile.yaml", dry_run=True)
+result = await profiles.apply_file("threadify-profile.yaml")
+```
+
 ## Configuration
 
 ### Connect options
