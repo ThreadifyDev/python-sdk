@@ -63,6 +63,8 @@ class ThreadifySpanExporter(_SpanExporterBase):
         _require_otel()
         self._connection = connection
         self._options = options or {}
+        if not isinstance(self._options.get("useWorkflowRunId", True), bool):
+            raise TypeError("useWorkflowRunId must be a boolean")
 
         # Normalise refs to a mapping {attribute_key: ref_key}
         refs = self._options.get("refs", [])
@@ -78,6 +80,8 @@ class ThreadifySpanExporter(_SpanExporterBase):
 
         # trace_id -> asyncio.Future[ThreadInstance]
         self._trace_threads: dict[str, asyncio.Future[Any]] = {}
+        self._start_lock = asyncio.Lock()
+        self._trace_references: dict[str, str] = {}
 
         # Capture the event loop so we can schedule coroutines from sync export().
         try:
@@ -133,6 +137,7 @@ class ThreadifySpanExporter(_SpanExporterBase):
         # Step name
         step_name = self._span_attr(span, "threadify.step_name") or span.name
         step = thread.step(step_name)
+        step.idempotency_key(f"otel:{trace_id}:{span_id}")
 
         # Separate attributes into context / refs
         context: dict[str, str] = {}
@@ -141,9 +146,14 @@ class ThreadifySpanExporter(_SpanExporterBase):
             "otel_span_id": span_id,
         }
 
+        if self._external_ref(span):
+            refs.pop("otel_trace_id", None)
+        context["otel.trace_id"] = trace_id
+        context["otel.span_id"] = span_id
         for key, value in span.attributes.items():
             # Skip internal threadify directives
             if key in {
+                "threadify.external_ref",
                 "threadify.thread_id",
                 "threadify.contract",
                 "threadify.label",
@@ -161,7 +171,8 @@ class ThreadifySpanExporter(_SpanExporterBase):
                     if key.startswith("threadify.ref.")
                     else self._refs_map[key]
                 )
-                refs[ref_key] = str_value
+                if ref_key != "threadify.external_ref":
+                    refs[ref_key] = str_value
             elif key.startswith("threadify.context."):
                 context[key.replace("threadify.context.", "")] = str_value
             else:
@@ -219,7 +230,8 @@ class ThreadifySpanExporter(_SpanExporterBase):
         # Root span auto-complete
         parent_ctx = getattr(span, "parent", None)
         parent_span_id = format(parent_ctx.span_id, "016x") if parent_ctx else None
-        if not parent_span_id:
+        correlated = bool(self._external_ref(span))
+        if (not parent_span_id and not correlated) or (correlated and span.attributes.get("threadify.run.complete") is True):
             if target_status == STATUS_SUCCESS:
                 await thread.complete("Root span completed successfully")
             else:
@@ -227,14 +239,56 @@ class ThreadifySpanExporter(_SpanExporterBase):
             # Clean up the trace map since the trace is finished
             self._trace_threads.pop(trace_id, None)
 
+    def _external_ref(self, span: ReadableSpan) -> str | None:
+        """Resolve optional reference attributes without changing explicit internal targets."""
+        resource = getattr(getattr(span, "resource", None), "attributes", {}) or {}
+        attrs = {**resource, **span.attributes}
+        if attrs.get("threadify.thread_id"):
+            return None
+        keys = ["threadify.external_ref"]
+        if self._options.get("useWorkflowRunId", True):
+            keys.append("workflow.run_id")
+        for key in keys:
+            if key not in attrs:
+                continue
+            value = attrs[key]
+            if not isinstance(value, str):
+                raise TypeError(f"{key} must be a string")
+            value = value.strip()
+            if len(value.encode("utf-8")) > 1024:
+                raise ValueError(f"{key} exceeds 1024 bytes")
+            if value:
+                return value
+        trace_id = format(span.get_span_context().trace_id, "032x")
+        return self._trace_references.get(trace_id)
+
     async def _get_or_start_thread(self, span: ReadableSpan, trace_id: str) -> Any:
         """Get or create a ThreadInstance for this trace."""
+        async with self._start_lock:
+            return await self._resolve_thread(span, trace_id)
+
+    async def _resolve_thread(self, span: ReadableSpan, trace_id: str) -> Any:
+        external_ref = self._external_ref(span)
+        if external_ref:
+            attrs = {**(getattr(getattr(span, "resource", None), "attributes", {}) or {}), **span.attributes}
+            thread = await self._connection.start(
+                label=attrs.get("threadify.label") or span.name,
+                contract_name=attrs.get("threadify.contract") or "",
+                service_name=attrs.get("threadify.service") or self._connection.service_name,
+                refs={"threadify.external_ref": external_ref, "otel_trace_id": trace_id},
+                tags=([attrs["threadify.tags"]] if isinstance(attrs.get("threadify.tags"), str) else list(attrs.get("threadify.tags", []))),
+                role=attrs.get("threadify.role") or "",
+            )
+            if trace_id not in self._trace_references:
+                self._trace_references[trace_id] = external_ref
+                asyncio.get_running_loop().call_later(600, self._trace_references.pop, trace_id, None)
+            return thread
         if trace_id not in self._trace_threads:
             fut: asyncio.Future[Any] = asyncio.get_event_loop().create_future()
             self._trace_threads[trace_id] = fut
 
             try:
-                existing_thread_id = self._span_attr(span, "threadify.thread_id")
+                existing_thread_id = ({**(getattr(getattr(span, "resource", None), "attributes", {}) or {}), **span.attributes}).get("threadify.thread_id")
                 if existing_thread_id:
                     role = self._span_attr(span, "threadify.role") or "participant"
                     thread = await self._connection.join(existing_thread_id, role)
@@ -247,28 +301,13 @@ class ThreadifySpanExporter(_SpanExporterBase):
                     )
                     role = self._span_attr(span, "threadify.role") or "participant"
 
-                    # Try to find an existing thread via GraphQL
-                    try:
-                        archived = await self._connection.get_thread_by_ref(
-                            "otel_trace_id", trace_id
-                        )
-                        if archived:
-                            logger.debug(
-                                "Found existing thread %s via GraphQL, joining...",
-                                archived.id,
-                            )
-                            thread = await self._connection.join(archived.id, role)
-                            fut.set_result(thread)
-                            return thread
-                    except Exception:
-                        pass
-
                     tags = self._span_attr_list(span, "threadify.tags")
                     thread = await self._connection.start(
                         label=label,
                         contract_name=contract_name or "",
                         service_name=service_name,
                         tags=tags,
+                        refs={"otel_trace_id": trace_id},
                     )
                 fut.set_result(thread)
             except Exception as exc:
