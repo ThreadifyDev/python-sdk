@@ -63,53 +63,29 @@ if __name__ == "__main__":
 
 For self-hosting, pass `engine_url="https://threadify.example.com"`. WebSocket and GraphQL paths are derived from that base, including reverse-proxy prefixes. Explicit `ws_url` and `graphql_url` remain available for split deployments.
 
-## Entity profile config as code
+## Entity profiles
 
-The management client sends a complete desired declaration to Threadify. The
-server performs metric reconciliation by name; SDK callers do not send database
-metric IDs or calculate deletions.
-
-```python
-profiles = Threadify.entity_profiles(
-    "your-service-api-key",
-    web_api_url="https://web.threadify.dev/api",
-)
-
-declaration = {
-    "name": "Customer",
-    "description": "Customer delivery intelligence",
-    "type": ["customer_id", "customer_email"],
-    "metrics": [
-        {
-            "name": "Delivery success rate",
-            "template_id": "delivery_success_rate",
-            "parameters": {"window": "30d"},
-        }
-    ],
-}
-
-plan = await profiles.apply(declaration, dry_run=True)
-result = await profiles.apply(declaration)
-await profiles.rename("Customer", "Account")  # explicit identity change
-await profiles.close()
-```
-
-The SDK can also load the declaration directly from YAML:
+Track a customer's activity across workflows by setting up a profile type with
+the [Threadify CLI](https://docs.threadify.dev/cli):
 
 ```yaml
-# threadify-profile.yaml
-name: Customer
-description: Customer delivery intelligence
-type:
-  - customer_id
-  - customer_email
-metrics: []
+# customers.yaml
+name: Customers
+type: [customer_id]
+description: Customer workflows
 ```
 
-```python
-plan = await profiles.apply_file("threadify-profile.yaml", dry_run=True)
-result = await profiles.apply_file("threadify-profile.yaml")
+```sh
+threadify-cli config set api-url https://threadify.example.com
+threadify-cli login
+threadify-cli profile-types create --file customers.yaml
+threadify-cli profiles create --type-id TYPE_ID --ref-value CUST-001 --name 'Jane Doe'
 ```
+
+Use the returned profile type ID for `TYPE_ID`. Include `customer_id` in your
+thread references to connect each workflow to its customer. Threadify can also
+create profiles as matching activity arrives. Open **Entity Profiles** in the
+dashboard to explore that history and configure metrics.
 
 ## Configuration
 

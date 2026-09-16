@@ -4,7 +4,6 @@ from threadify.client import (
 )
 from threadify.connection import Connection
 from threadify.data_retriever import ArchivedStep, ArchivedThread, DataRetriever
-from threadify.management import EntityProfileManager, ManagementAPIError, profile_slug
 from threadify.models import (
     AccessLevel,
     CompleteDataOptions,
@@ -38,9 +37,6 @@ __all__ = [
     "is_duplicate_error",
     "Notification",
     "DataRetriever",
-    "EntityProfileManager",
-    "ManagementAPIError",
-    "profile_slug",
     "ArchivedThread",
     "ArchivedStep",
     "ThreadifySpanExporter",
