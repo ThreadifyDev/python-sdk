@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -17,7 +17,7 @@ def _make_mock_ws():
     ws.send = AsyncMock()
     ws.close = AsyncMock()
     # Mock async iteration (empty by default).
-    ws.__aiter__ = MagicMock(return_value=iter([]))
+    ws.__aiter__.return_value = []
     return ws
 
 
@@ -27,6 +27,10 @@ def _make_connection():
     conn = Connection.__new__(Connection)
     # Call __init__ to set all fields, then override tasks so they don't run.
     conn.__init__(ws, "test-key", "test-service", "https://example.com/graphql", debug=False, max_in_flight=10)
+    # Cancel the actual tasks before replacing their handles. Otherwise the
+    # listener can close the connection while response-queue tests are running.
+    conn._listener_task.cancel()
+    conn._heartbeat_task.cancel()
     loop = asyncio.get_event_loop()
     conn._listener_task = loop.create_future()
     conn._listener_task.set_result(None)
@@ -165,7 +169,7 @@ class TestWaitResponse:
         asyncio.run(scenario())
 
 
-class TestStart:
+class TestLegacyStartCompatibility:
     @pytest.mark.asyncio
     async def test_start_with_label_and_optional_contract(self):
         conn = _make_connection()

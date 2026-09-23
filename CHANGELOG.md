@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Breaking changes
+
+- Remove `Threadify.entity_profiles`, `EntityProfileManager`, `ManagementAPIError`
+  and `profile_slug`. Create profile types and named profiles with `threadify-cli`;
+  configure metrics in the Engine UI. Tracing and reference-based profile
+  generation are unchanged. Remove the unused PyYAML dependency.
+
 ## [0.2.0](https://github.com/creativeJoe007/ThreadifyEngine/compare/threadify-sdk-python-v0.1.0...threadify-sdk-python-v0.2.0) (2026-02-19)
 
 

@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, TypedDict
 
 # --- Constants ---
 
@@ -122,7 +122,8 @@ class ConnectOptions:
     """Configuration for connecting to the Threadify Engine."""
 
     service_name: str = ""
-    ws_url: str = DEFAULT_WS_URL
+    engine_url: str = ""
+    ws_url: str = ""
     graphql_url: str = ""
     debug: bool = False
     max_in_flight: int = DEFAULT_MAX_IN_FLIGHT
@@ -130,6 +131,13 @@ class ConnectOptions:
     logger: logging.Logger | None = None
 
     def with_defaults(self) -> "ConnectOptions":
+        if self.engine_url:
+            ws, gql = engine_endpoints(self.engine_url)
+            if self.ws_url and self.ws_url != ws or self.graphql_url and self.graphql_url != gql:
+                raise ValueError("Use engine_url without separate transport URLs")
+            self.ws_url, self.graphql_url = ws, gql
+        if not self.ws_url:
+            self.ws_url = DEFAULT_WS_URL
         if not self.graphql_url and self.ws_url:
             self.graphql_url = derive_graphql_url(self.ws_url)
         if self.max_in_flight == 0:
@@ -157,6 +165,8 @@ class StepResult:
     idempotency_key: str
     timestamp: str
     duplicate: bool = False
+    step_id: str = ""
+    validation: Any = None
 
 
 @dataclass
@@ -209,6 +219,7 @@ class WaitOptions:
 
     timeout: float = DEFAULT_WAIT_TIMEOUT
     statuses: list[str] = field(default_factory=list)
+    invocation_id: str = ""
 
 
 @dataclass
@@ -292,3 +303,59 @@ def first_non_empty(*values: str) -> str:
 def now_iso() -> str:
     """Return the current UTC time in ISO 8601 format."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def engine_endpoints(base: str) -> tuple[str, str]:
+    from urllib.parse import urlsplit, urlunsplit
+
+    if not isinstance(base, str) or not base.strip():
+        raise ValueError("engine_url must be an absolute HTTP or HTTPS URL")
+    base = base.strip()
+    parsed = urlsplit(base)
+    if (
+        parsed.scheme not in ("http", "https")
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or "?" in base
+        or "#" in base
+        or any(c.isspace() for c in base)
+    ):
+        raise ValueError("engine_url must use HTTP(S) without credentials, query, or fragment")
+    _ = parsed.port  # Validate malformed ports before connecting.
+    path = parsed.path.rstrip("/")
+    return (
+        urlunsplit(
+            ("wss" if parsed.scheme == "https" else "ws", parsed.netloc, path + "/threads", "", "")
+        ),
+        urlunsplit((parsed.scheme, parsed.netloc, path + "/graphql", "", "")),
+    )
+
+
+def reference_query(refs: RefQuery | dict[str, str], **filters: Any) -> RefQuery:
+    from dataclasses import replace
+
+    if isinstance(refs, RefQuery):
+        query = replace(refs, **filters)
+    else:
+        if not isinstance(refs, dict) or len(refs) != 1:
+            raise ValueError("refs must contain exactly one reference pair")
+        key, value = next(iter(refs.items()))
+        query = RefQuery(ref_key=key, ref_value=value, **filters)
+    if not isinstance(query.ref_key, str) or not query.ref_key.strip():
+        raise ValueError("reference key must be a non-empty string")
+    if not isinstance(query.ref_value, str) or not query.ref_value.strip():
+        raise ValueError("reference value must be a non-empty string")
+    return query
+
+
+# The dictionary shape mirrors the JS options object using Python field spelling.
+
+
+class ThreadOptions(TypedDict, total=False):
+    label: str
+    contract: str
+    refs: dict[str, str]
+    tags: list[str]
+    service_name: str
+    role: str

@@ -141,33 +141,64 @@ class ThreadStep:
     # --- Status methods ---
 
     async def stop(
-        self, status: str = STATUS_SUCCESS, message_or_data: str | dict | None = None
+        self,
+        status: str = STATUS_SUCCESS,
+        message_or_data: str | dict | None = None,
+        *,
+        wait_for: bool = False,
+        timeout: float = 10.0,
     ) -> StepResult:
         """Stop the step with an explicit status and optional message/data.
 
         This is the generic status method; prefer :meth:`success`,
         :meth:`failed`, or :meth:`error` for clarity.
         """
-        return await self._stop(status, message_or_data)
+        return await self._stop(status, message_or_data, wait_for=wait_for, timeout=timeout)
 
-    async def success(self, message_or_data: str | dict | None = None) -> StepResult:
+    async def success(
+        self,
+        message_or_data: str | dict | None = None,
+        *,
+        wait_for: bool = False,
+        timeout: float = 10.0,
+    ) -> StepResult:
         """Mark the step as successful and send it."""
-        return await self._stop(STATUS_SUCCESS, message_or_data)
+        return await self._stop(STATUS_SUCCESS, message_or_data, wait_for=wait_for, timeout=timeout)
 
-    async def failed(self, message_or_data: str | dict | None = None) -> StepResult:
+    async def failed(
+        self,
+        message_or_data: str | dict | None = None,
+        *,
+        wait_for: bool = False,
+        timeout: float = 10.0,
+    ) -> StepResult:
         """Mark the step as failed and send it."""
-        return await self._stop(STATUS_FAILED, message_or_data)
+        return await self._stop(STATUS_FAILED, message_or_data, wait_for=wait_for, timeout=timeout)
 
-    async def error(self, message_or_data: str | dict | None = None) -> StepResult:
+    async def error(
+        self,
+        message_or_data: str | dict | None = None,
+        *,
+        wait_for: bool = False,
+        timeout: float = 10.0,
+    ) -> StepResult:
         """Mark the step as error and send it."""
-        return await self._stop(STATUS_ERROR, message_or_data)
+        return await self._stop(STATUS_ERROR, message_or_data, wait_for=wait_for, timeout=timeout)
 
-    async def _stop(self, status: str, message_or_data: str | dict | None = None) -> StepResult:
+    async def _stop(
+        self,
+        status: str,
+        message_or_data: str | dict | None = None,
+        *,
+        wait_for: bool = False,
+        timeout: float = 10.0,
+    ) -> StepResult:
         """Finalise the step and send the event."""
         if self._error is not None:
             raise self._error
 
-        self._event[FIELD_FINISHED_AT] = now_iso()
+        if not self._event.get(FIELD_FINISHED_AT):
+            self._event[FIELD_FINISHED_AT] = now_iso()
         self._event[FIELD_STATUS] = status
         self._event[FIELD_CONTEXT] = self._context
 
@@ -195,13 +226,41 @@ class ThreadStep:
                 for ss in self._sub_steps
             ]
 
+        from threadify.waiting import ThreadifyError, checked_validation, validate_timeout
+
+        if wait_for:
+            validate_timeout(timeout)
+        grants = self._thread._invocation_grants
+        grant = grants.get(self._step_name) if isinstance(grants, dict) else None
+        if grant:
+            if self._event.get("invocationId") not in (None, grant.invocation_id):
+                raise ValueError("Invocation does not match the claimed step")
+            self._event["invocationId"] = grant.invocation_id
+            if not self._manual_idempotency_key:
+                self._manual_idempotency_key = grant.invocation_id
+            grants.pop(self._step_name, None)
+
         # Generate idempotency key.
         self._event[FIELD_IDEMPOTENCY_KEY] = self._generate_idempotency_key()
 
         # Send event.
         try:
-            await self._send_event()
-        except DuplicateStepError:
+            if wait_for or self._event.get("invocationId"):
+                event = dict(self._event)
+                if wait_for:
+                    import math
+
+                    event.update(waitFor=True, timeoutMs=math.ceil(timeout * 1000))
+                acknowledgement = await self._thread._conn._request(event, timeout)
+            else:
+                acknowledgement = await self._send_event()
+        except Exception as exc:
+            exc.idempotency_key = self._event.get(FIELD_IDEMPOTENCY_KEY, "")
+            exc.invocation_id = self._event.get("invocationId", "")
+            if wait_for or not (
+                isinstance(exc, DuplicateStepError) or getattr(exc, "is_duplicate", False)
+            ):
+                raise
             return StepResult(
                 step_name=self._step_name,
                 thread_id=self._thread.thread_id,
@@ -214,7 +273,17 @@ class ThreadStep:
                 duplicate=True,
             )
 
+        validation = None
+        if wait_for:
+            step_id = acknowledgement.get("stepId")
+            if not step_id:
+                raise ThreadifyError(
+                    "THREADIFY_INVALID_WAIT_RESPONSE", "Engine did not return an event ID"
+                )
+            validation = checked_validation(acknowledgement.get("validation"), step_id)
         return StepResult(
+            step_id=acknowledgement.get("stepId", ""),
+            validation=validation,
             step_name=self._step_name,
             thread_id=self._thread.thread_id,
             status=status,

@@ -44,6 +44,7 @@ from threadify.models import (
     FIELD_THREAD_TOKEN,
     STATUS_SUCCESS,
     RefQuery,
+    ThreadOptions,
     first_non_empty,
     require_non_empty,
 )
@@ -82,6 +83,8 @@ class Connection:
 
         self._recv_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._response_wait_lock = asyncio.Lock()
+        self._closed_event = asyncio.Event()
+        self._requests: dict[str, asyncio.Future] = {}
 
         self._data_retriever: DataRetriever | None = None
 
@@ -115,12 +118,24 @@ class Connection:
                     for n in msg.get(FIELD_NOTIFICATIONS, []):
                         if isinstance(n, dict):
                             self._handle_notification(n, "")
+                elif msg.get("requestId"):
+                    pending = self._requests.get(msg["requestId"])
+                    if pending is not None and not pending.done():
+                        pending.set_result(msg)
                 else:
                     await self._recv_queue.put(msg)
         except Exception as exc:
             self._logger.error(f"readLoop error: {exc}")
         finally:
             self._connected = False
+            self._closed_event.set()
+            for pending in self._requests.values():
+                if not pending.done():
+                    pending.set_exception(
+                        ConnectionError(
+                            "Threadify connection closed; operation outcome may be unknown"
+                        )
+                    )
 
     async def _heartbeat_loop(self) -> None:
         while self._connected:
@@ -135,6 +150,77 @@ class Connection:
     async def _wait_response(
         self, match: Callable[[dict], bool], timeout: float = 10.0
     ) -> dict[str, Any]:
+        response = asyncio.create_task(self._wait_response_legacy(match, timeout))
+        closed = asyncio.create_task(self._closed_event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                [response, closed], timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+            )
+            if response in done:
+                return response.result()
+            if closed in done:
+                raise ConnectionError(
+                    "Threadify connection closed; operation outcome may be unknown"
+                )
+            raise asyncio.TimeoutError("response timeout")
+        finally:
+            response.cancel()
+            closed.cancel()
+            await asyncio.gather(response, closed, return_exceptions=True)
+
+    async def _request(self, message: dict[str, Any], timeout: float = 10.0) -> dict[str, Any]:
+        from uuid import uuid4
+
+        from threadify.waiting import ThreadifyError, validate_timeout
+
+        validate_timeout(timeout)
+        if not self._connected:
+            raise ConnectionError("Threadify connection closed")
+        request_id = str(uuid4())
+        future = asyncio.get_running_loop().create_future()
+        self._requests[request_id] = future
+        deadline = asyncio.get_running_loop().time() + timeout
+
+        async def exchange():
+            await self._send({**message, "requestId": request_id})
+            return await future
+
+        try:
+            response = await asyncio.wait_for(exchange(), timeout)
+            if asyncio.get_running_loop().time() >= deadline:
+                raise asyncio.TimeoutError()
+            if response.get("status") != "success":
+                raise ThreadifyError(
+                    "THREADIFY_REQUEST_FAILED",
+                    response.get("message", "Request failed"),
+                    request_id=request_id,
+                    response=response,
+                    is_duplicate=response.get("isDuplicate", False),
+                )
+            return response
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            if self._connected and (message.get("await") or message.get("waitFor")):
+                try:
+                    await asyncio.wait_for(
+                        self._send({"action": "cancelWait", "targetRequestId": request_id}), 0.2
+                    )
+                except Exception:
+                    pass
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            raise ThreadifyError(
+                "THREADIFY_WAIT_TIMEOUT",
+                "Timed out waiting for Engine response",
+                request_id=request_id,
+            ) from exc
+        finally:
+            self._requests.pop(request_id, None)
+            if not future.done():
+                future.cancel()
+
+    async def _wait_response_legacy(
+        self, match: Callable[[dict], bool], timeout: float = 10.0
+    ) -> dict[str, Any]:
         """Wait for a response matching the predicate."""
         buffered: list[dict[str, Any]] = []
         async with self._response_wait_lock:
@@ -145,9 +231,7 @@ class Connection:
                     if remaining <= 0:
                         raise asyncio.TimeoutError("response timeout")
 
-                    msg = await asyncio.wait_for(
-                        self._recv_queue.get(), timeout=remaining
-                    )
+                    msg = await asyncio.wait_for(self._recv_queue.get(), timeout=remaining)
                     if match(msg):
                         return msg
                     buffered.append(msg)
@@ -161,6 +245,70 @@ class Connection:
             raise ConnectionError("WebSocket is not connected")
         await self._ws.send(json.dumps(msg))
 
+    async def thread(self, thread_key: str, options: ThreadOptions | None = None) -> ThreadInstance:
+        """Atomically create or resume an application-owned key.
+
+        Options are creation defaults; resuming loads the stored contract version.
+        Terminal threads and explicitly conflicting contracts are rejected.
+        """
+        from threadify.thread import ThreadInstance
+
+        if not isinstance(thread_key, str) or not thread_key.strip():
+            raise ValueError("thread_key must be a non-empty string")
+        thread_key = thread_key.strip()
+        if len(thread_key.encode("utf-8")) > 1024:
+            raise ValueError("thread_key exceeds 1024 bytes")
+        if options is not None and not isinstance(options, dict):
+            raise TypeError("thread options must be a dictionary")
+        opts = options or {}
+        unknown = opts.keys() - {"label", "contract", "refs", "tags", "service_name", "role"}
+        if unknown:
+            raise TypeError(f"unknown thread options: {', '.join(sorted(unknown))}")
+        for name in ("label", "contract", "service_name", "role"):
+            if name in opts and (not isinstance(opts[name], str) or not opts[name].strip()):
+                raise TypeError(f"{name} must be a non-empty string when supplied")
+        refs = opts.get("refs", {})
+        if not isinstance(refs, dict) or any(
+            not isinstance(key, str) or not key.strip() or not isinstance(value, str)
+            for key, value in refs.items()
+        ):
+            raise TypeError("refs must be a dictionary of strings")
+        tags = opts.get("tags", [])
+        if not isinstance(tags, list) or any(
+            not isinstance(tag, str) or not tag.strip() for tag in tags
+        ):
+            raise ValueError("tags must be a list of non-empty strings")
+        message = {
+            FIELD_ACTION: "thread",
+            "threadKey": thread_key,
+            FIELD_SERVICE_NAME: opts.get("service_name") or self._service_name,
+        }
+        for option, field in (
+            ("label", "label"),
+            ("contract", FIELD_CONTRACT_NAME),
+            ("role", FIELD_ROLE),
+            ("refs", FIELD_REFS),
+            ("tags", FIELD_TAGS),
+        ):
+            if option in opts:
+                message[field] = opts[option]
+        response = await self._request(message)
+        thread_id = response.get(FIELD_THREAD_ID)
+        if not thread_id or response.get("threadKey") != thread_key:
+            raise RuntimeError("Engine returned an invalid thread identity")
+        thread = self._threads.get(thread_id)
+        if thread is None:
+            thread = ThreadInstance(self, thread_id)
+            self._threads[thread_id] = thread
+        thread.thread_key = thread_key
+        thread.label = response.get("label", "")
+        thread.contract_id = response.get("contractId") or ""
+        thread.contract_name = response.get("contractName") or ""
+        thread.contract_version = response.get("contractVersion")
+        thread.refs = dict(response.get("refs") or {})
+        thread.tags = list(response.get("tags") or [])
+        return thread
+
     async def start(
         self,
         label: str = "",
@@ -170,6 +318,7 @@ class Connection:
         tags: list[str] | None = None,
         role: str = "",
     ) -> ThreadInstance:
+        """Compatibility API for creating a new thread; prefer ``thread(key, options)``."""
         from threadify.thread import ThreadInstance
 
         if not self._connected:
@@ -219,12 +368,18 @@ class Connection:
         thread = ThreadInstance(
             self,
             thread_id,
-            contract_name,
+            resp.get("contractId") or contract_name,
             effective_role,
             resp.get(FIELD_ACCESS_LEVEL, ""),
-            message_refs.copy(),
+            dict(resp.get("refs", message_refs) or {}),
         )
-        thread.tags = list(tags) if tags else []
+        # Trace-only exporter correlation can resume a contracted thread even
+        # when this span omitted the contract; retain the Engine's metadata.
+        thread.thread_key = resp.get("threadKey") or None
+        thread.label = resp.get("label", label_value)
+        thread.contract_name = resp.get("contractName") or contract_name
+        thread.contract_version = resp.get("contractVersion")
+        thread.tags = list(resp.get("tags", tags) or [])
         self._threads[thread_id] = thread
         self._logger.debug(f"Thread started: {thread_id}")
         return thread
@@ -257,7 +412,7 @@ class Connection:
         elif token_or_thread_id is not None:
             require_non_empty("token_or_thread_id", token_or_thread_id)
             # If it has 3 parts (JWT) or is a long string, it's likely a token. Otherwise it's a thread ID.
-            is_token = len(token_or_thread_id.split('.')) == 3 or len(token_or_thread_id) > 50
+            is_token = len(token_or_thread_id.split(".")) == 3 or len(token_or_thread_id) > 50
             if is_token and not role:
                 msg[FIELD_THREAD_TOKEN] = token_or_thread_id
             else:
@@ -276,7 +431,14 @@ class Connection:
 
         thread_id = resp[FIELD_THREAD_ID]
         thread_role = resp.get(FIELD_ROLE, "")
-        thread = ThreadInstance(self, thread_id, resp.get("contractId", ""), thread_role, resp.get(FIELD_ACCESS_LEVEL, ""), None)
+        thread = ThreadInstance(
+            self,
+            thread_id,
+            resp.get("contractId", ""),
+            thread_role,
+            resp.get(FIELD_ACCESS_LEVEL, ""),
+            None,
+        )
         self._threads[thread_id] = thread
         self._logger.debug(f"Joined thread: {thread_id}, Role: {thread_role}")
         return thread
@@ -297,6 +459,14 @@ class Connection:
             pass
         finally:
             self._connected = False
+            self._closed_event.set()
+            for pending in self._requests.values():
+                if not pending.done():
+                    pending.set_exception(
+                        ConnectionError(
+                            "Threadify connection closed; operation outcome may be unknown"
+                        )
+                    )
             self._listener_task.cancel()
             self._heartbeat_task.cancel()
             try:
@@ -487,16 +657,22 @@ class Connection:
     async def get_thread(self, thread_id: str) -> ArchivedThread:
         return await self._get_data_retriever().get_thread(thread_id)
 
-    async def get_thread_by_ref(self, ref_key: str, ref_value: str) -> ArchivedThread | None:
+    async def get_thread_by_ref(
+        self, ref_key: str | dict[str, str], ref_value: str | None = None
+    ) -> ArchivedThread | None:
         threads = await self._get_data_retriever().get_threads_by_ref(
-            RefQuery(ref_key=ref_key, ref_value=ref_value, limit=1)
+            ref_key if isinstance(ref_key, dict) else {ref_key: ref_value}, limit=1
         )
         return threads[0] if threads else None
 
-    async def get_threads_by_ref(self, query: RefQuery) -> list[ArchivedThread]:
-        return await self._get_data_retriever().get_threads_by_ref(query)
+    async def get_threads_by_ref(
+        self, query: RefQuery | dict[str, str], **filters: Any
+    ) -> list[ArchivedThread]:
+        return await self._get_data_retriever().get_threads_by_ref(query, **filters)
 
-    async def get_validation_results(self, thread_id: str, step_name: str = "") -> list[dict[str, Any]]:
+    async def get_validation_results(
+        self, thread_id: str, step_name: str = ""
+    ) -> list[dict[str, Any]]:
         return await self._get_data_retriever().get_validation_results(thread_id, step_name)
 
     async def get_thread_chain(self, root_id: str, max_depth: int = 3) -> list[ArchivedThread]:
@@ -536,8 +712,7 @@ def _parse_event(event: str) -> tuple[str, str]:
     event_type = parts[1] if len(parts) > 1 and parts[1] else "*"
     if source not in {"step", "rule", "thread", "*"}:
         raise ValueError(
-            f"Unsupported notification source {source!r}; "
-            "expected 'step', 'rule', 'thread', or '*'"
+            f"Unsupported notification source {source!r}; expected 'step', 'rule', 'thread', or '*'"
         )
     return source, event_type
 

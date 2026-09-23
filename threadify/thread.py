@@ -50,7 +50,7 @@ class ThreadInstance:
 
     Usage::
 
-        thread = await conn.start("Order-123")
+        thread = await conn.thread("order:ORD-123", {"label": "Order 123"})
         step = thread.step("order_placed")
         result = await step.add_context({"orderId": "ORD-123"}).success("Order received")
         await thread.complete("All done")
@@ -67,6 +67,10 @@ class ThreadInstance:
     ):
         self._conn = conn
         self.thread_id = thread_id
+        self.thread_key: str | None = None
+        self.label = ""
+        self.contract_name = ""
+        self.contract_version: int | None = None
         self.contract_id = contract_id
         self.role = role
         self.access_level = access_level
@@ -74,6 +78,7 @@ class ThreadInstance:
         self.tags: list[str] = []  # Tags applied at thread creation (immutable)
 
         self._steps: dict[str, Any] = {}
+        self._invocation_grants: dict[str, Any] = {}
         self._pending_waits: dict[str, _PendingWait] = {}
 
     def step(self, step_name: str) -> ThreadStep:
@@ -128,7 +133,21 @@ class ThreadInstance:
             expires_at=resp.get(FIELD_EXPIRES_AT, ""),
         )
 
-    async def wait_for(
+    async def wait_for(self, step_name: str, options: WaitOptions | None = None):
+        """Wait for Engine permission to execute one contract step invocation."""
+        from threadify.waiting import wait_for_permission
+
+        return await wait_for_permission(self, step_name, options)
+
+    async def wait_for_validation(
+        self, step_name: str, step_id: str, options: WaitOptions | None = None
+    ):
+        """Wait for validation of the exact previously acknowledged event."""
+        from threadify.waiting import wait_for_validation
+
+        return await wait_for_validation(self, step_name, step_id, options)
+
+    async def wait_for_notification(
         self,
         step_name: str,
         options: WaitOptions | None = None,

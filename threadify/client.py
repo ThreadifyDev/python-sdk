@@ -9,7 +9,6 @@ from typing import Any
 import websockets
 
 from threadify.connection import Connection
-from threadify.management import EntityProfileManager
 from threadify.models import (
     ACTION_CONNECT,
     FIELD_ACTION,
@@ -32,6 +31,7 @@ def _copy_connect_options(src: ConnectOptions) -> ConnectOptions:
 def _build_connect_options(
     *,
     base: ConnectOptions | None,
+    engine_url: str | None = None,
     service_name: str | None,
     ws_url: str | None,
     graphql_url: str | None,
@@ -42,6 +42,10 @@ def _build_connect_options(
 ) -> ConnectOptions:
     cfg = _copy_connect_options(base) if base else ConnectOptions()
 
+    if engine_url is not None:
+        if ws_url is not None or graphql_url is not None:
+            raise ValueError("Use engine_url without separate transport URLs")
+        cfg.engine_url = engine_url
     if service_name is not None:
         cfg.service_name = service_name
     if ws_url is not None:
@@ -70,19 +74,11 @@ class Threadify:
     FOR_PARTICIPANT = "participant"
 
     @staticmethod
-    def entity_profiles(
-        api_key: str,
-        *,
-        web_api_url: str = "https://web.threadify.dev/api",
-    ) -> EntityProfileManager:
-        """Create a declarative entity-profile management client."""
-        return EntityProfileManager(api_key, web_api_url=web_api_url)
-
-    @staticmethod
     async def connect(
         api_key: str,
         *args: Any,
         service_name: str | None = None,
+        engine_url: str | None = None,
         ws_url: str | None = None,
         graphql_url: str | None = None,
         debug: bool | None = None,
@@ -109,6 +105,7 @@ class Threadify:
         cfg = _build_connect_options(
             base=options or legacy_config,
             service_name=service_name if service_name is not None else legacy_service_name,
+            engine_url=engine_url,
             ws_url=ws_url,
             graphql_url=graphql_url,
             debug=debug,
@@ -117,10 +114,19 @@ class Threadify:
             logger=logger,
         )
 
-        ws = await asyncio.wait_for(
-            websockets.connect(cfg.ws_url),
-            timeout=cfg.connect_timeout,
-        )
+        try:
+            ws = await asyncio.wait_for(
+                websockets.connect(cfg.ws_url),
+                timeout=cfg.connect_timeout,
+            )
+        except Exception as exc:
+            from threadify.waiting import http_error
+
+            response = getattr(exc, "response", None)
+            status = getattr(response, "status_code", None) or getattr(exc, "status_code", None)
+            if isinstance(status, int):
+                raise http_error(status, f"Threadify connection rejected: HTTP {status}") from exc
+            raise
 
         connect_msg = {
             FIELD_ACTION: ACTION_CONNECT,
@@ -128,15 +134,15 @@ class Threadify:
             FIELD_SERVICE_NAME: cfg.service_name,
             FIELD_MAX_IN_FLIGHT: cfg.max_in_flight,
         }
-        await ws.send(json.dumps(connect_msg))
-
-        raw = await asyncio.wait_for(ws.recv(), timeout=cfg.connect_timeout)
-        resp = json.loads(raw)
-
-        if resp.get(FIELD_ACTION) != ACTION_CONNECT or resp.get(FIELD_STATUS) != STATUS_SUCCESS:
+        try:
+            await ws.send(json.dumps(connect_msg))
+            raw = await asyncio.wait_for(ws.recv(), timeout=cfg.connect_timeout)
+            resp = json.loads(raw)
+            if resp.get(FIELD_ACTION) != ACTION_CONNECT or resp.get(FIELD_STATUS) != STATUS_SUCCESS:
+                raise ConnectionError(resp.get(FIELD_MESSAGE, "connection failed"))
+        except BaseException:
             await ws.close()
-            msg = resp.get(FIELD_MESSAGE, "connection failed")
-            raise ConnectionError(msg)
+            raise
 
         conn = Connection(
             ws=ws,
@@ -155,6 +161,7 @@ class Threadify:
         api_key: str,
         *args: Any,
         service_name: str | None = None,
+        engine_url: str | None = None,
         ws_url: str | None = None,
         graphql_url: str | None = None,
         debug: bool | None = None,
@@ -179,6 +186,7 @@ class Threadify:
         cfg = _build_connect_options(
             base=options or legacy_config,
             service_name=service_name if service_name is not None else legacy_service_name,
+            engine_url=engine_url,
             ws_url=ws_url,
             graphql_url=graphql_url,
             debug=debug,

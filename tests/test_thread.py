@@ -72,7 +72,7 @@ async def test_wait_for():
 
     asyncio.create_task(simulate_notif())
 
-    notif = await thread.wait_for("order_placed", WaitOptions(timeout=1))
+    notif = await thread.wait_for_notification("order_placed", WaitOptions(timeout=1))
     assert notif.step_name == "order_placed"
     assert notif.step_status == "success"
 
