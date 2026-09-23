@@ -169,7 +169,7 @@ class TestWaitResponse:
         asyncio.run(scenario())
 
 
-class TestStart:
+class TestLegacyStartCompatibility:
     @pytest.mark.asyncio
     async def test_start_with_label_and_optional_contract(self):
         conn = _make_connection()

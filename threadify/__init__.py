@@ -16,6 +16,7 @@ from threadify.models import (
     StepResult,
     SubStepData,
     ThreadEndResponse,
+    ThreadOptions,
     WaitOptions,
 )
 from threadify.notification import Notification
@@ -46,6 +47,7 @@ __all__ = [
     "InviteOptions",
     "InviteResponse",
     "ThreadEndResponse",
+    "ThreadOptions",
     "WaitOptions",
     "NotificationData",
     "RefQuery",

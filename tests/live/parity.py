@@ -16,17 +16,21 @@ async def main():
     )
     try:
         if sys.argv[1] == "create":
-            thread = await conn.start(
-                "SDK parity",
-                contract_name=os.environ["THREADIFY_CONTRACT"],
-                role="python",
-                refs={"parity_id": os.environ["THREADIFY_PARITY_ID"]},
+            thread = await conn.thread(
+                f"parity:{os.environ['THREADIFY_PARITY_ID']}",
+                {
+                    "label": "SDK parity",
+                    "contract": os.environ["THREADIFY_CONTRACT"],
+                    "role": "python",
+                    "refs": {"parity_id": os.environ["THREADIFY_PARITY_ID"]},
+                },
             )
             result = await thread.step("approval").success("approved", wait_for=True)
             assert result.validation.decision == "passed"
             print(json.dumps({"thread_id": thread.thread_id, "step_id": result.step_id}))
         else:
-            thread = await conn.join(os.environ["THREADIFY_THREAD_ID"], "python")
+            thread = await conn.thread(f"parity:{os.environ['THREADIFY_PARITY_ID']}")
+            assert thread.thread_id == os.environ["THREADIFY_THREAD_ID"]
             validation = await thread.wait_for_validation("charge", os.environ["THREADIFY_STEP_ID"])
             assert validation.decision == "passed"
             await thread.wait_for("finish")

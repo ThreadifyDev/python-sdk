@@ -268,7 +268,7 @@ async def test_otel_exporter_uses_recorded_span_and_event_times():
     ws, conn, thread = connected()
     try:
         exporter = ThreadifySpanExporter(conn)
-        exporter._get_or_start_thread = AsyncMock(return_value=thread)
+        exporter._get_or_resolve_thread = AsyncMock(return_value=thread)
         task = asyncio.create_task(exporter._do_process_span(recorded))
         req = await ws.sent.get()
         # OTEL's ordinary addRefs and event acknowledgements retain legacy routing.

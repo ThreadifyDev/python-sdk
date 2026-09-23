@@ -36,12 +36,13 @@ async def main():
         return
 
     try:
-        thread = await conn.start(
-            contract_name="order_processing",
-            role="customer",
-            refs={"order_id": "ORD-123"},
-            tags=["priority"],
-        )
+        thread = await conn.thread("order:ORD-123", {
+            "label": "Order ORD-123",
+            "contract": "order_processing",
+            "role": "customer",
+            "refs": {"order_id": "ORD-123"},
+            "tags": ["priority"],
+        })
 
         await thread.add_refs({"crm_id": "CRM-456"})
         
@@ -135,21 +136,45 @@ thread = await conn.join(
 )
 ```
 
-### Start options
+### Create or resume a thread
 
-`Connection.start(...)` supports named options for contract, role, refs, and tags, while preserving the older positional forms:
+`await connection.thread(thread_key, options=None)` atomically creates or resumes
+an application-owned key within the tenant. Use a session, order, or process ID
+that your application already knows; you do not need to persist Threadify's
+internal `thread_id` between requests.
 
 ```python
-thread = await conn.start(
-    contract_name="order_processing",
-    role="customer",
-    refs={"customer_id": "123"},
-    tags=["priority"],
-)
-thread = await conn.start("Order-123", "customer")
-thread = await conn.start({"customer_id": "123"}, "customer")
-thread = await conn.start("Order-123")  # contract is optional
+thread = await conn.thread("agent-session:123", {
+    "label": "Agent session",
+    "contract": "agent_contract",
+    "refs": {"customer_id": "123"},
+    "tags": ["priority"],
+})
+
+# A later request or another worker uses the same key without repeating options.
+thread = await conn.thread("agent-session:123")
+await thread.step("tool_call").add_context({"tool": "search"}).success()
 ```
+
+The optional dictionary accepts `label`, `contract`, `refs`, `tags`,
+`service_name`, and `role`. `ThreadOptions` is exported for type annotations.
+Labels, contracts, service names, and roles must be non-empty strings when
+supplied; refs map non-empty string keys to string values, and tags are a list
+of non-empty strings.
+
+Options are creation defaults. Resuming loads the stored label, refs, tags,
+contract name, and pinned contract version into the returned handle. Repeating
+an existing contract is allowed; supplying a conflicting contract fails without
+changing the thread. Use `await thread.add_refs({...})` to change references
+explicitly. Metadata is available as `thread.thread_key`, `thread.label`,
+`thread.contract_name`, `thread.contract_version`, `thread.refs`, and `thread.tags`.
+
+Keys are trimmed, case-sensitive strings of at most 1024 UTF-8 bytes. Concurrent
+calls with the same key resolve to one thread. A key-only call on an unknown key
+creates a free-form thread, so initialize contracted sessions before collectors
+or other workers report activity. Closed, completed, and cancelled threads reject
+acquisition and further writes; use a new key for a new process. `join()` remains
+available for internal IDs and invitation tokens.
 
 ## Subscriptions
 
@@ -190,7 +215,15 @@ This SDK follows [Semantic Versioning](https://semver.org/) and [Conventional Co
 
 ## OpenTelemetry Integration
 
-The Python SDK includes the OpenTelemetry SpanExporter in the core package.
+The Python SDK includes the OpenTelemetry SpanExporter in the core package. Use
+`BatchSpanProcessor`: synchronous `export()` waits for Engine acknowledgements
+on its worker thread and returns failure if any span fails or the deadline expires.
+It continues attempting unrelated spans in a failed batch and does not complete
+sessions from that batch. Calling synchronous export on the connection event
+loop is rejected to avoid a deadlock. Before closing that loop or the connection,
+run `await asyncio.to_thread(provider.shutdown)` to drain queued spans. Use
+`await asyncio.to_thread(provider.force_flush)` for an explicit flush.
+
 
 ```python
 from opentelemetry import trace
@@ -212,7 +245,20 @@ exporter = conn.create_span_exporter(options={
 provider = TracerProvider()
 provider.add_span_processor(BatchSpanProcessor(exporter))
 trace.set_tracer_provider(provider)
+
+# Initialize before exporting spans when this session has a contract.
+await conn.thread("agent-session:123", {"contract": "agent_contract"})
+tracer = trace.get_tracer("agent")
+with tracer.start_as_current_span("tool_call", attributes={
+    "threadify.thread_key": "agent-session:123",
+}):
+    pass  # Perform the instrumented operation.
 ```
+
+The exporter resolves `threadify.thread_key` using the same create-or-resume
+operation as `connection.thread()`. Omit the contract on later spans; the stored
+contract version is loaded automatically. Shared root spans keep the session open.
+See [OTel correlation](OTEL_CORRELATION.md) for identity precedence and completion.
 
 **Filter patterns:**
 
@@ -242,7 +288,7 @@ from threadify import Threadify, WaitOptions, ThreadifyError
 
 connection = await Threadify.connect(api_key, engine_url="https://threadify.example.com", service_name="payments")
 threads = await connection.get_threads_by_ref({"order_id": "ORD-1001"}, status="active", limit=25)
-thread = await connection.join(thread_id, "processor")
+thread = await connection.thread("order:ORD-1001")
 grant = await thread.wait_for("charge", WaitOptions(timeout=15))
 # Execute the permitted business operation here.
 result = await thread.step("charge").add_context({"amount": 42}).success("charged", wait_for=True, timeout=15)

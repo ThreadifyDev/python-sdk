@@ -44,6 +44,7 @@ from threadify.models import (
     FIELD_THREAD_TOKEN,
     STATUS_SUCCESS,
     RefQuery,
+    ThreadOptions,
     first_non_empty,
     require_non_empty,
 )
@@ -244,6 +245,70 @@ class Connection:
             raise ConnectionError("WebSocket is not connected")
         await self._ws.send(json.dumps(msg))
 
+    async def thread(self, thread_key: str, options: ThreadOptions | None = None) -> ThreadInstance:
+        """Atomically create or resume an application-owned key.
+
+        Options are creation defaults; resuming loads the stored contract version.
+        Terminal threads and explicitly conflicting contracts are rejected.
+        """
+        from threadify.thread import ThreadInstance
+
+        if not isinstance(thread_key, str) or not thread_key.strip():
+            raise ValueError("thread_key must be a non-empty string")
+        thread_key = thread_key.strip()
+        if len(thread_key.encode("utf-8")) > 1024:
+            raise ValueError("thread_key exceeds 1024 bytes")
+        if options is not None and not isinstance(options, dict):
+            raise TypeError("thread options must be a dictionary")
+        opts = options or {}
+        unknown = opts.keys() - {"label", "contract", "refs", "tags", "service_name", "role"}
+        if unknown:
+            raise TypeError(f"unknown thread options: {', '.join(sorted(unknown))}")
+        for name in ("label", "contract", "service_name", "role"):
+            if name in opts and (not isinstance(opts[name], str) or not opts[name].strip()):
+                raise TypeError(f"{name} must be a non-empty string when supplied")
+        refs = opts.get("refs", {})
+        if not isinstance(refs, dict) or any(
+            not isinstance(key, str) or not key.strip() or not isinstance(value, str)
+            for key, value in refs.items()
+        ):
+            raise TypeError("refs must be a dictionary of strings")
+        tags = opts.get("tags", [])
+        if not isinstance(tags, list) or any(
+            not isinstance(tag, str) or not tag.strip() for tag in tags
+        ):
+            raise ValueError("tags must be a list of non-empty strings")
+        message = {
+            FIELD_ACTION: "thread",
+            "threadKey": thread_key,
+            FIELD_SERVICE_NAME: opts.get("service_name") or self._service_name,
+        }
+        for option, field in (
+            ("label", "label"),
+            ("contract", FIELD_CONTRACT_NAME),
+            ("role", FIELD_ROLE),
+            ("refs", FIELD_REFS),
+            ("tags", FIELD_TAGS),
+        ):
+            if option in opts:
+                message[field] = opts[option]
+        response = await self._request(message)
+        thread_id = response.get(FIELD_THREAD_ID)
+        if not thread_id or response.get("threadKey") != thread_key:
+            raise RuntimeError("Engine returned an invalid thread identity")
+        thread = self._threads.get(thread_id)
+        if thread is None:
+            thread = ThreadInstance(self, thread_id)
+            self._threads[thread_id] = thread
+        thread.thread_key = thread_key
+        thread.label = response.get("label", "")
+        thread.contract_id = response.get("contractId") or ""
+        thread.contract_name = response.get("contractName") or ""
+        thread.contract_version = response.get("contractVersion")
+        thread.refs = dict(response.get("refs") or {})
+        thread.tags = list(response.get("tags") or [])
+        return thread
+
     async def start(
         self,
         label: str = "",
@@ -253,6 +318,7 @@ class Connection:
         tags: list[str] | None = None,
         role: str = "",
     ) -> ThreadInstance:
+        """Compatibility API for creating a new thread; prefer ``thread(key, options)``."""
         from threadify.thread import ThreadInstance
 
         if not self._connected:
@@ -302,12 +368,18 @@ class Connection:
         thread = ThreadInstance(
             self,
             thread_id,
-            contract_name,
+            resp.get("contractId") or contract_name,
             effective_role,
             resp.get(FIELD_ACCESS_LEVEL, ""),
-            message_refs.copy(),
+            dict(resp.get("refs", message_refs) or {}),
         )
-        thread.tags = list(tags) if tags else []
+        # Trace-only exporter correlation can resume a contracted thread even
+        # when this span omitted the contract; retain the Engine's metadata.
+        thread.thread_key = resp.get("threadKey") or None
+        thread.label = resp.get("label", label_value)
+        thread.contract_name = resp.get("contractName") or contract_name
+        thread.contract_version = resp.get("contractVersion")
+        thread.tags = list(resp.get("tags", tags) or [])
         self._threads[thread_id] = thread
         self._logger.debug(f"Thread started: {thread_id}")
         return thread

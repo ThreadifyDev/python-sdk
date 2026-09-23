@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, TypedDict
 
 # --- Constants ---
 
@@ -347,3 +347,15 @@ def reference_query(refs: RefQuery | dict[str, str], **filters: Any) -> RefQuery
     if not isinstance(query.ref_value, str) or not query.ref_value.strip():
         raise ValueError("reference value must be a non-empty string")
     return query
+
+
+# The dictionary shape mirrors the JS options object using Python field spelling.
+
+
+class ThreadOptions(TypedDict, total=False):
+    label: str
+    contract: str
+    refs: dict[str, str]
+    tags: list[str]
+    service_name: str
+    role: str

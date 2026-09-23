@@ -50,7 +50,7 @@ class ThreadInstance:
 
     Usage::
 
-        thread = await conn.start("Order-123")
+        thread = await conn.thread("order:ORD-123", {"label": "Order 123"})
         step = thread.step("order_placed")
         result = await step.add_context({"orderId": "ORD-123"}).success("Order received")
         await thread.complete("All done")
@@ -67,6 +67,10 @@ class ThreadInstance:
     ):
         self._conn = conn
         self.thread_id = thread_id
+        self.thread_key: str | None = None
+        self.label = ""
+        self.contract_name = ""
+        self.contract_version: int | None = None
         self.contract_id = contract_id
         self.role = role
         self.access_level = access_level
