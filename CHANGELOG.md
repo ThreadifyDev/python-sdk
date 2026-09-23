@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.4.0] - 2026-09-23
 
 ### Breaking changes
 
@@ -8,6 +8,18 @@
   and `profile_slug`. Create profile types and named profiles with `threadify-cli`;
   configure metrics in the Engine UI. Tracing and reference-based profile
   generation are unchanged. Remove the unused PyYAML dependency.
+
+### Added
+
+- Add `connection.thread(thread_key, label=, contract=, refs=, tags=)` to
+  atomically create or resume a thread using a durable application identifier,
+  with a new `ThreadOptions` type for the create/resume options.
+
+### Changed
+
+- Use `threadify.thread_key` throughout the OpenTelemetry exporter and OTLP
+  ingestion for trace correlation, replacing the previous external-reference
+  correlation attribute.
 
 ## [0.2.0](https://github.com/creativeJoe007/ThreadifyEngine/compare/threadify-sdk-python-v0.1.0...threadify-sdk-python-v0.2.0) (2026-02-19)
 
